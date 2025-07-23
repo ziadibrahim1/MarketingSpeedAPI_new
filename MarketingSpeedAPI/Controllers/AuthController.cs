@@ -47,7 +47,7 @@ namespace MarketingSpeedAPI.Controllers
 
             if (user == null)
             {
-                var msg = lang == "ar" ? "البريد الإلكتروني غير موجود" : "Email not found";
+                var msg = lang == "ar" ? "البريد  الإلكتروني غير موجود" : "Email not found";
                 return Unauthorized(new { message = msg });
             }
 
