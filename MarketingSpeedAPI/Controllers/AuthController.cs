@@ -1,10 +1,8 @@
-﻿using MailKit.Net.Smtp;
-using MarketingSpeedAPI.Data;
+﻿using MarketingSpeedAPI.Data;
 using MarketingSpeedAPI.DTOs;
 using MarketingSpeedAPI.Models;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using MimeKit;
 using System.Security.Cryptography;
 using System.Text;
 
