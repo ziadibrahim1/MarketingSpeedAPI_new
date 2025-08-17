@@ -45,14 +45,14 @@ namespace MarketingSpeedAPI.Controllers
 
             if (user == null)
             {
-                var msg = lang == "ar" ? "البريد  الإلكتروني غير موجود" : "Email not found";
+                var msg = lang == "ar" ? "البريد الإلكتروني غير موجود" : "Email not found";
                 return Unauthorized(new { message = msg });
             }
 
             var hashedPassword = ComputeSha256Hash(dto.Password);
             Console.WriteLine($"Hashed: {hashedPassword}");
 
-            if (user.Password_Hash != hashedPassword)
+            if (user.PasswordHash != hashedPassword)
             {
                 var msg = lang == "ar" ? "كلمة المرور غير صحيحة" : "Incorrect password";
                 return Unauthorized(new { message = msg });
@@ -64,6 +64,10 @@ namespace MarketingSpeedAPI.Controllers
                 return Unauthorized(new { message = msg });
             }
 
+            // تحديث آخر ظهور
+            user.LastSeen = DateTime.UtcNow;
+            await _context.SaveChangesAsync();
+
             var successMsg = lang == "ar" ? "تم تسجيل الدخول بنجاح" : "Login successful";
 
             return Ok(new
@@ -72,7 +76,17 @@ namespace MarketingSpeedAPI.Controllers
                 user = new
                 {
                     user.Id,
-                    user.Email
+                    user.Email,
+                    user.FirstName,
+                    user.MiddleName,
+                    user.LastName,
+                    user.UserType,
+                    user.CompanyName,
+                    user.ProfilePicture,
+                    user.Language,
+                    user.Theme,
+                    user.Status,
+                    user.LastSeen
                 }
             });
         }
@@ -86,28 +100,42 @@ namespace MarketingSpeedAPI.Controllers
                 if (await _context.Users.AnyAsync(u => u.Email == dto.Email))
                     return BadRequest(new { error = "Email already exists" });
 
+                if (string.IsNullOrWhiteSpace(dto.Password))
+                    return BadRequest(new { error = "كلمة المرور مطلوبة" });
+
                 // توليد كود عشوائي من 6 أرقام
                 string code = _random.Next(100000, 999999).ToString();
-                if (string.IsNullOrWhiteSpace(dto.Password_Hash))
-                    return BadRequest(new { error = "كلمة المرور مطلوبة" });
 
                 var user = new User
                 {
-                    FullName = dto.FullName,
+                    FirstName = dto.FirstName,
+                    MiddleName = dto.MiddleName,
+                    LastName = dto.LastName,
                     Email = dto.Email,
-                    Password_Hash = ComputeSha256Hash(dto.Password_Hash),
+                    CountryCode = dto.CountryCode,
+                    Phone = dto.Phone,
+                    Country = dto.Country,
+                    City = dto.City,
+                    UserType = dto.UserType,
+                    CompanyName = dto.CompanyName,
+                    Description = dto.Description,
+                    Language = dto.Language ?? "ar",
+                    Theme = dto.Theme ?? "light",
+                    Status = "active",
+                    AcceptNotifications = dto.AcceptNotifications,
+                    AcceptTerms = dto.AcceptTerms,
+                    PasswordHash = ComputeSha256Hash(dto.Password),
                     VerificationCode = code,
                     VerificationCodeExpiresAt = DateTime.UtcNow.AddMinutes(2),
-                    CreatedAt = DateTime.UtcNow, // ← هنحتاجها للحذف لاحقًا
+                    CreatedAt = DateTime.UtcNow,
                     IsEmailVerified = false
                 };
 
-                // ✅ أرسل الكود أولاً قبل الحفظ
+                // إرسال البريد أولاً
                 var emailSent = await _emailService.SendVerificationEmailAsync(user.Email, code);
                 if (!emailSent)
                     return StatusCode(500, new { error = "فشل إرسال بريد التحقق" });
 
-                // ✅ بعد نجاح الإرسال، احفظه في قاعدة البيانات
                 _context.Users.Add(user);
                 await _context.SaveChangesAsync();
 
@@ -133,7 +161,6 @@ namespace MarketingSpeedAPI.Controllers
             if (user.VerificationCodeExpiresAt < DateTime.UtcNow)
                 return BadRequest(new { error = "انتهت صلاحية رمز التحقق" });
 
-
             // تم التحقق بنجاح
             user.IsEmailVerified = true;
             user.VerificationCode = null;
@@ -152,19 +179,15 @@ namespace MarketingSpeedAPI.Controllers
             if (user.IsEmailVerified)
                 return BadRequest(new { error = "البريد الإلكتروني تم التحقق منه بالفعل" });
 
-            // إنشاء كود تحقق جديد وتحديث وقت الانتهاء
             string code = _random.Next(100000, 999999).ToString();
             user.VerificationCode = code;
             user.VerificationCodeExpiresAt = DateTime.UtcNow.AddMinutes(2);
 
-            // إرسال البريد الإلكتروني
             await _emailService.SendVerificationEmailAsync(user.Email, code);
-
             await _context.SaveChangesAsync();
 
             return Ok(new { message = "تم إرسال كود تحقق جديد إلى البريد الإلكتروني" });
         }
-
 
         [HttpGet("GetCountries")]
         public async Task<IActionResult> GetCountries(string lang = "en")
