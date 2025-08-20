@@ -20,7 +20,7 @@ public class DeleteUnverifiedUsersJob : BackgroundService
 
             var cutoff = DateTime.UtcNow.AddHours(-24); // عمر الصلاحية
             var toDelete = db.Users
-                .Where(u => !u.IsEmailVerified && u.CreatedAt < cutoff);
+                .Where(u => !u.is_email_verified && u.created_at < cutoff);
 
             db.Users.RemoveRange(toDelete);
             await db.SaveChangesAsync();

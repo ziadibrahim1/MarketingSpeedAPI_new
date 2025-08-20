@@ -2,6 +2,6 @@
 {
     public class EmailDto
     {
-        public string Email { get; set; }
+        public required string email { get; set; }
     }
 }

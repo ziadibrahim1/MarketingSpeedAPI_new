@@ -2,7 +2,7 @@
 {
     public class LoginRequest
     {
-        public string Email { get; set; } = string.Empty;
-        public string Password { get; set; } = string.Empty;
+        public string email { get; set; } = string.Empty;
+        public string password_hash { get; set; } = string.Empty;
     }
 }

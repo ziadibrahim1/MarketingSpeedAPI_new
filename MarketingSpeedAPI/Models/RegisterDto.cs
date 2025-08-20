@@ -3,30 +3,30 @@
     public class RegisterDto
     {
         // معلومات الاسم
-        public required string FirstName { get; set; }
-        public string? MiddleName { get; set; }
-        public required string LastName { get; set; }
+        public required string first_name { get; set; }
+        public string? middle_name { get; set; }
+        public  string? last_name { get; set; }
 
         // بيانات التواصل
-        public required string CountryCode { get; set; }
-        public required string Phone { get; set; }
-        public required string Email { get; set; }
-        public required string Country { get; set; }
-        public required string City { get; set; }
+        public  string? country_code { get; set; }
+        public  string? phone { get; set; }
+        public required string email { get; set; }
+        public  string? country { get; set; }
+        public  string? city { get; set; }
 
         // نوع المستخدم والمؤسسة
-        public required string UserType { get; set; } // "company" أو "individual"
-        public string? CompanyName { get; set; }
-        public string? Description { get; set; } // وصف المؤسسة أو نبذة شخصية
+        public  string? user_type { get; set; } // "company" أو "individual"
+        public string? company_name { get; set; }
+        public string? description { get; set; } // وصف المؤسسة أو نبذة شخصية
 
         // إعدادات التطبيق
-        public string? Language { get; set; } = "ar";
-        public string? Theme { get; set; } = "light";
-        public bool AcceptNotifications { get; set; } = true;
-        public bool AcceptTerms { get; set; } = false;
+        public string? language { get; set; } = "ar";
+        public string? theme { get; set; } = "light";
+        public bool accept_notifications { get; set; } = true;
+        public bool accept_terms { get; set; } = false;
 
         // كلمة المرور
-        public required string Password { get; set; }
+        public required string password_hash { get; set; }
     }
 
 

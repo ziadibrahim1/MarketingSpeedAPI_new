@@ -9,8 +9,20 @@ namespace MarketingSpeedAPI.Data
     {
         public AppDbContext(DbContextOptions<AppDbContext> options) : base(options) { }
         public DbSet<User> Users { get; set; }
-        public DbSet<CountriesAndCities> CountriesAndCities { get; set; }
+        public DbSet<Country> Countries { get; set; }
+        public DbSet<City> Cities { get; set; }
         public DbSet<TermsAndConditions> TermsAndConditions { get; set; }
+
+        protected override void OnModelCreating(ModelBuilder modelBuilder)
+        {
+            base.OnModelCreating(modelBuilder);
+
+            // العلاقة بين Country و Cities
+            modelBuilder.Entity<Country>()
+                .HasMany(c => c.Cities)
+                .WithOne()
+                .HasForeignKey(c => c.CountryId);
+        }
 
     }
 }

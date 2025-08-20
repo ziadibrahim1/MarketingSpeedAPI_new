@@ -1,56 +1,42 @@
 ﻿public class User
 {
-    public int Id { get; set; }
+    public int id { get; set; }
 
     // معلومات الاسم
-    public required string FirstName { get; set; }
-    public string? MiddleName { get; set; }
-    public required string LastName { get; set; }
+    public required string first_name { get; set; }
+    public string? middle_name { get; set; }
+    public  string? last_name { get; set; }
 
     // بيانات التواصل
-    public required string CountryCode { get; set; }
-    public required string Phone { get; set; }
-    public required string Email { get; set; }
-    public required string Country { get; set; }
-    public required string City { get; set; }
+    public  string? country_code { get; set; }
+    public  string? phone { get; set; }
+    public required string email { get; set; }
+    public  string? country { get; set; }
+    public  string? city { get; set; }
 
     // نوع المستخدم والمؤسسة
-    public required string UserType { get; set; } // "company" أو "individual"
-    public string? CompanyName { get; set; }
-    public string? Description { get; set; } // وصف المؤسسة أو نبذة شخصية
+    public  string? user_type { get; set; } // "company" أو "individual"
+    public string? company_name { get; set; }
+    public string? description { get; set; } // وصف المؤسسة أو نبذة شخصية
 
     // إعدادات التطبيق
-    public string Language { get; set; } = "ar"; // "ar" أو "en"
-    public string Theme { get; set; } = "light"; // "light" أو "dark"
-    public string Status { get; set; } = "active"; // "active", "inactive", "banned"
-    public string? ProfilePicture { get; set; } // رابط الصورة في Firebase Storage
-    public bool AcceptNotifications { get; set; } = true;
-    public bool AcceptTerms { get; set; } = false;
+    public string language { get; set; } = "ar"; // "ar" أو "en"
+    public string theme { get; set; } = "light"; // "light" أو "dark"
+    public string status { get; set; } = "active"; // "active", "inactive", "banned"
+    public string? profile_picture { get; set; } // رابط الصورة في Firebase Storage
+    public bool accept_notifications { get; set; } = true;
+    public bool accept_terms { get; set; } = false;
 
     // كلمات المرور والتحقق
-    public required string PasswordHash { get; set; }
-    public bool IsEmailVerified { get; set; } = false;
-    public string? VerificationCode { get; set; }
-    public DateTime? VerificationCodeExpiresAt { get; set; }
+    public required string password_hash { get; set; }
+    public bool is_email_verified { get; set; } = false;
+    public string? verification_code { get; set; }
+    public required DateTime verification_code_expires_at { get; set; } = DateTime.UtcNow.AddMinutes(2);
 
     // تتبع النشاط
-    public DateTime? LastSeen { get; set; }
-    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
-    public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+    public DateTime? last_seen { get; set; }
+    public DateTime created_at { get; set; } = DateTime.UtcNow;
+    public DateTime updated_at { get; set; } = DateTime.UtcNow;
 }
 
-public class CountriesAndCities
-{
-    public int Id { get; set; }
-    public string CountryNameEn { get; set; }
-    public string CountryNameAr { get; set; }
-    public string CityNameEn { get; set; }
-    public string CityNameAr { get; set; }
-}
 
-public class TermsAndConditions
-{
-    public int Id { get; set; }
-    public string Language { get; set; }
-    public string Content { get; set; }
-}

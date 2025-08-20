@@ -2,8 +2,9 @@
 {
     public class VerifyCodeDto
     {
-        public string Email { get; set; }
-        public string Code { get; set; }
+        public string? email { get; set; }
+        public string? verification_code { get; set; }
     }
+                       
 
 }
