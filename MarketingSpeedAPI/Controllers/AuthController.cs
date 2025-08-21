@@ -168,7 +168,7 @@ namespace MarketingSpeedAPI.Controllers
             if (!string.IsNullOrEmpty(dto.Country_Code)) user.country_code = dto.Country_Code;
             if (!string.IsNullOrEmpty(dto.Phone)) user.phone = dto.Phone;
             if (!string.IsNullOrEmpty(dto.Country)) user.country = dto.Country;
-            if (!string.IsNullOrEmpty(dto.City)) user.city = dto.City;
+            if (dto.City.HasValue) user.city = dto.City;
             if (!string.IsNullOrEmpty(dto.User_Type)) user.user_type = dto.User_Type;
             if (!string.IsNullOrEmpty(dto.Company_Name)) user.company_name = dto.Company_Name;
             if (!string.IsNullOrEmpty(dto.Description)) user.description = dto.Description;
@@ -366,17 +366,53 @@ namespace MarketingSpeedAPI.Controllers
             return Ok(new { message = "Password reset successfully" });
         }
 
-        [HttpGet("getUserBy/{id}")]
+        [HttpGet("getUserBy")]
         public async Task<IActionResult> GetUserById(int id)
         {
-            var user = await _context.Users
-                .AsNoTracking() // قراءة فقط بدون تتبع التغييرات
-                .FirstOrDefaultAsync(u => u.id == id);
+            var user = await (
+                from u in _context.Users
+                join c in _context.Cities
+                    on u.city equals c.Id into cityGroup
+                from c in cityGroup.DefaultIfEmpty()   // 👈 Left Join
+                where u.id == id
+                select new
+                {
+                    u.id,
+                    u.first_name,
+                    u.last_name,
+                    u.email,
+                    u.phone,
+                    u.country,
+                    u.country_code,
+                    u.user_type,
+                    u.company_name,
+                    u.description,
+                    u.password_hash,
+                    cityName = c != null ? c.NameAr : null,   // ✅ لو مفيش مدينة يرجع null
+                    CityId = u.city
+                }
+            )
+            .AsNoTracking()
+            .FirstOrDefaultAsync();
 
             if (user == null)
                 return NotFound(new { message = "User not found" });
 
-            return Ok(user); // يرجع كل بيانات المستخدم كـ JSON
+            return Ok(user);
+        }
+
+
+        [HttpGet("getCityBy/{id}")]
+        public async Task<IActionResult> getCityBy(int id)
+        {
+            var city = await _context.Cities
+                .AsNoTracking() // قراءة فقط بدون تتبع التغييرات
+                .FirstOrDefaultAsync(c => c.Id == id);
+
+            if (city == null)
+                return NotFound(new { message = "city not found" });
+
+            return Ok(city); 
         }
     }
 }

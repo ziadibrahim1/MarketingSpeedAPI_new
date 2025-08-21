@@ -12,7 +12,7 @@
     public  string? phone { get; set; }
     public required string email { get; set; }
     public  string? country { get; set; }
-    public  string? city { get; set; }
+    public int? city { get; set; }
 
     // نوع المستخدم والمؤسسة
     public  string? user_type { get; set; } // "company" أو "individual"
