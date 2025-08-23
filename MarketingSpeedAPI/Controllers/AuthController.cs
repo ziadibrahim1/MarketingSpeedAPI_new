@@ -367,7 +367,7 @@ namespace MarketingSpeedAPI.Controllers
         }
 
         [HttpGet("getUserBy")]
-        public async Task<IActionResult> GetUserById(int id)
+        public async Task<IActionResult> GetUserById(int id,string lang)
         {
             var user = await (
                 from u in _context.Users
@@ -380,6 +380,7 @@ namespace MarketingSpeedAPI.Controllers
                     u.id,
                     u.first_name,
                     u.last_name,
+                    u.middle_name,
                     u.email,
                     u.phone,
                     u.country,
@@ -388,7 +389,8 @@ namespace MarketingSpeedAPI.Controllers
                     u.company_name,
                     u.description,
                     u.password_hash,
-                    cityName = c != null ? c.NameAr : null,   // ✅ لو مفيش مدينة يرجع null
+                    u.theme,
+                    cityName =lang == "ar"? c.NameAr :c.NameEn,   
                     CityId = u.city
                 }
             )
@@ -414,5 +416,21 @@ namespace MarketingSpeedAPI.Controllers
 
             return Ok(city); 
         }
+
+
+        [HttpPut("update-theme/{id}")]
+        public async Task<IActionResult> UpdateTheme(int id, [FromBody] UpdateProfileDto dto)
+        {
+            var user = await _context.Users.FindAsync(id);
+            if (user == null)
+                return NotFound(new { message = "User not found" });
+            if (!string.IsNullOrEmpty(dto.Theme)) user.theme = dto.Theme;
+            if (dto.Accept_Notifications.HasValue) user.accept_notifications = dto.Accept_Notifications.Value;
+            if (!string.IsNullOrEmpty(dto.Language)) user.language = dto.Language;
+            user.updated_at = DateTime.UtcNow;
+            await _context.SaveChangesAsync();
+            return Ok(new { message = "", user });
+        }
+
     }
 }
