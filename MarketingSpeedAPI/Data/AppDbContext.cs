@@ -1,6 +1,5 @@
 ﻿using MarketingSpeedAPI.Models;
 using Microsoft.EntityFrameworkCore;
-using System.Collections.Generic;
 
 namespace MarketingSpeedAPI.Data
 
@@ -12,6 +11,8 @@ namespace MarketingSpeedAPI.Data
         public DbSet<Country> Countries { get; set; }
         public DbSet<City> Cities { get; set; }
         public DbSet<TermsAndConditions> TermsAndConditions { get; set; }
+        public DbSet<Conversation> Conversations { get; set; }
+        public DbSet<conversation_messages> conversation_messages { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -22,6 +23,13 @@ namespace MarketingSpeedAPI.Data
                 .HasMany(c => c.Cities)
                 .WithOne()
                 .HasForeignKey(c => c.CountryId);
+            // Conversation
+            modelBuilder.Entity<Conversation>()
+                .HasMany(c => c.conversation_messages)
+                .WithOne(m => m.Conversation)
+                .HasForeignKey(m => m.ConversationId);
+
+            base.OnModelCreating(modelBuilder);
         }
 
     }
