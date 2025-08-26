@@ -432,5 +432,164 @@ namespace MarketingSpeedAPI.Controllers
             return Ok(new { message = "", user });
         }
 
+        [HttpGet("conversations")]
+        public async Task<IActionResult> GetConversations()
+        {
+            var conversations = await _context.Conversations
+                .Where(c => c.Status == "active")
+                .OrderByDescending(m => m.StartedAt)
+                .Include(c => c.Agent) // 👈 هات بيانات موظف الدعم
+                .Include(c => c.conversation_messages)
+                .Select(c => new
+                {
+                    id = c.Id,
+                    lastMessage = c.conversation_messages
+                        
+                        .OrderByDescending(m => m.SentAt)
+                        .Select(m => m.MessageText)
+                        .FirstOrDefault(),
+                    agentName = c.Agent != null
+                        ? c.Agent.FirstName + " " + c.Agent.LastName
+                        : "الدعم الفني"
+                })
+                .ToListAsync();
+
+            return Ok(conversations);
+        }
+
+
+        [HttpGet("conversations/{id}/get_messages")]
+        public async Task<IActionResult> GetMessages(int id)
+        {
+            var messages = await _context.conversation_messages
+                .Where(m => m.ConversationId == id)
+                .OrderBy(m => m.SentAt)
+                .Select(m => new {
+                    m.Id,
+                    m.Sender,
+                    m.MessageText,
+                    m.AttachmentUrl,
+                    m.SentAt
+                })
+                .ToListAsync();
+
+            return Ok(messages);
+        }
+        
+        [HttpPost("conversations/{id}/messages")]
+        public async Task<IActionResult> SendMessage(int id, [FromBody] SendMessageDto dto)
+        {
+            var message = new conversation_messages
+            {
+                ConversationId = id,
+                Sender = dto.Sender,
+                MessageText = dto.MessageText,
+                AttachmentUrl = dto.AttachmentUrl,
+                SentAt = DateTime.UtcNow
+            };
+
+            _context.conversation_messages.Add(message);
+            await _context.SaveChangesAsync();
+
+            return Ok(message);
+        }
+
+        [HttpPost("conversations")]
+        public async Task<IActionResult> CreateConversation([FromBody] CreateConversationDto dto)
+        {
+            var conversation = new Conversation
+            {
+                UserId = dto.UserId,
+                AgentId = null, // 👈 لسه محدش استلم
+                Status = "active",
+                DurationMinutes = 30,
+                StartedAt = DateTime.UtcNow
+            };
+
+            _context.Conversations.Add(conversation);
+            await _context.SaveChangesAsync();
+
+            return Ok(new
+            {
+                conversation.Id,
+                AgentName = "في انتظار موظف الدعم" // placeholder
+            });
+        }
+
+        [HttpPost("{id}")]
+        public async Task<IActionResult> DeactivateConversation(int id)
+        {
+            var conversation = await _context.Conversations.FindAsync(id);
+
+            if (conversation == null)
+                return NotFound();
+
+            conversation.Status = "closed"; // 👈 بدل ما نحذفها
+            await _context.SaveChangesAsync();
+
+            return Ok(new { message = "Conversation closed successfully" });
+        }
+
+        [HttpPost("groups/request")]
+        public async Task<IActionResult> AddGroupRequest([FromBody] GroupRequestDto model)
+        {
+            if (!ModelState.IsValid)
+                return BadRequest(ModelState);
+            var entity = new GroupRequest
+            {
+                UserId = model.UserId,
+                Platform = model.Platform,
+                GroupName = model.GroupName,
+                GroupLink = model.GroupLink,
+                CountryId = model.CountryId,
+                CategoryId = model.CategoryId,
+                Status = "pending",
+                CreatedAt = DateTime.UtcNow
+            };
+            _context.group_requests.Add(entity);
+            await _context.SaveChangesAsync();
+
+            return Ok(new { success = true, id = entity.Id });
+        }
+        [HttpGet("referral-link/{userId}")]
+        public async Task<IActionResult> GetReferralLink(int userId)
+        {
+            var user = await _context.Users.FindAsync(userId);
+            if (user == null) return NotFound();
+
+            // لو عنده كود إحالة مسبقاً
+            var referral = await _context.Referrals
+                .FirstOrDefaultAsync(r => r.ReferrerId == userId);
+
+            if (referral == null)
+            {
+                referral = new Referral
+                {
+                    ReferrerId = userId,
+                    ReferralCode = Guid.NewGuid().ToString().Substring(0, 8).ToUpper()
+                };
+                _context.Referrals.Add(referral);
+                await _context.SaveChangesAsync();
+            }
+
+            var link = $"https://myApp.com/referral?code={referral.ReferralCode}";
+            return Ok(new { referralLink = link });
+        }
+
+        [HttpGet("notifications")]
+        public async Task<IActionResult> GetNotifications()
+        {
+            var notifications = await _context.Notifications
+                .OrderByDescending(n => n.CreatedAt)
+                .Select(n => new {
+                    id = n.Id,
+                    title = n.Title,
+                    message = n.Message,
+                    createdAt = n.CreatedAt
+                })
+                .ToListAsync();
+
+            return Ok(notifications);
+        }
     }
 }
