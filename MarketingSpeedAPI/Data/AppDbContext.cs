@@ -26,6 +26,9 @@ namespace MarketingSpeedAPI.Data
         public DbSet<Notification> Notifications { get; set; }
         public DbSet<NotificationAttachment> NotificationAttachments { get; set; }
         public DbSet<UserNotification> user_notifications { get; set; }
+        public DbSet<Package> Packages { get; set; }
+        public DbSet<PackageFeature> PackageFeatures { get; set; }
+        public DbSet<PackageLog> PackageLogs { get; set; }
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             base.OnModelCreating(modelBuilder);
@@ -52,6 +55,18 @@ namespace MarketingSpeedAPI.Data
                 .WithMany(a => a.Conversations)
                 .HasForeignKey(c => c.AgentId)
                 .OnDelete(DeleteBehavior.SetNull);
+
+            modelBuilder.Entity<Package>()
+                .HasMany(p => p.Features)
+                .WithOne(f => f.Package)
+                .HasForeignKey(f => f.PackageId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<Package>()
+                .HasMany(p => p.Logs)
+                .WithOne(l => l.Package)
+                .HasForeignKey(l => l.PackageId)
+                .OnDelete(DeleteBehavior.Cascade);
         }
 
     }

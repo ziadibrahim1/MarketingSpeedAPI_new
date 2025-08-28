@@ -25,9 +25,9 @@ public class NotificationsController : ControllerBase
             {
                 Id = un.Notification.Id,
                 Title = un.Notification.Title,
-                Message = un.Notification.Message,
-                CreatedAt = un.Notification.CreatedAt,
-                IsRead = un.IsRead
+                body = un.Notification.Message,
+                dateTime = un.Notification.CreatedAt,
+                IsRead = un.IsRead 
             })
             .ToListAsync();
 
@@ -69,7 +69,7 @@ public class NotificationsController : ControllerBase
     public async Task<IActionResult> MarkAsRead(int userId, int notificationId)
     {
         var userNotification = await _context.user_notifications
-            .FirstOrDefaultAsync(un => un.UserId == userId && un.NotificationId == notificationId || un.UserId ==1 && un.NotificationId == notificationId);
+            .FirstOrDefaultAsync(un => un.UserId == userId && un.NotificationId == notificationId );
 
         if (userNotification == null) return NotFound();
 
