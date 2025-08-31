@@ -16,27 +16,273 @@ namespace MarketingSpeedAPI.Controllers
             _context = context;
         }
 
+        // ✅ تعديل GetAll Packages
         [HttpGet]
-        public async Task<ActionResult<IEnumerable<Package>>> GetAll()
+        public async Task<ActionResult<IEnumerable<PackageDto>>> GetAll(
+     [FromQuery] int? categoryId,
+     [FromQuery] string? status,           // ✅ فلترة بالحالة (active/inactive)
+     [FromQuery] bool? archived,           // ✅ فلترة بالأرشفة
+     [FromQuery] decimal? minPrice,        // ✅ فلترة بالسعر الأدنى
+     [FromQuery] decimal? maxPrice,        // ✅ فلترة بالسعر الأعلى
+     [FromQuery] int? minDuration,         // ✅ فلترة بالمدة الأدنى
+     [FromQuery] int? maxDuration,         // ✅ فلترة بالمدة الأعلى
+     [FromQuery] string? keyword           // ✅ بحث بالكلمة (اسم عربي/إنجليزي/مميزات)
+ )
         {
-            var packages = await _context.Packages
-     .Include(p => p.Features)
-     .Select(p => new PackageDto
-     {
-         Id = p.Id,
-         Name = p.Name,
-         Price = (double)p.Price,
-         DurationDays = p.DurationDays,
-         Discount = (double)p.Discount,
-         Features = p.Features.Select(f => f.Feature).ToList(),
-         SubscriberCount = p.SubscriberCount
-     }).ToListAsync();
+            var query = _context.Packages
+                .Include(p => p.Features)
+                .Include(p => p.Category)
+                .AsQueryable();
+
+            // فلترة بالفئة
+            if (categoryId.HasValue)
+                query = query.Where(p => p.CategoryId == categoryId.Value);
+
+            // فلترة بالحالة
+            if (!string.IsNullOrEmpty(status))
+                query = query.Where(p => p.Status.ToLower() == status.ToLower());
+
+            // فلترة بالأرشفة
+            if (archived.HasValue)
+                query = query.Where(p => p.Archived == archived.Value);
+
+            // فلترة بالسعر
+            if (minPrice.HasValue)
+                query = query.Where(p => p.Price >= minPrice.Value);
+            if (maxPrice.HasValue)
+                query = query.Where(p => p.Price <= maxPrice.Value);
+
+            // فلترة بالمدة
+            if (minDuration.HasValue)
+                query = query.Where(p => p.DurationDays >= minDuration.Value);
+            if (maxDuration.HasValue)
+                query = query.Where(p => p.DurationDays <= maxDuration.Value);
+
+            // فلترة بالبحث (اسم عربي / إنجليزي / ميزة)
+            if (!string.IsNullOrEmpty(keyword))
+            {
+                query = query.Where(p =>
+                    p.Name.Contains(keyword) ||
+                    p.NameEn.Contains(keyword) ||
+                    p.Features.Any(f => f.Feature.Contains(keyword) || f.FeatureEn.Contains(keyword))
+                );
+            }
+
+            var packages = await query
+                .Select(p => new PackageDto
+                {
+                    Id = p.Id,
+                    Name = p.Name,
+                    NameEn = p.NameEn,
+                    Price = (double)p.Price,
+                    DurationDays = (int)p.DurationDays,
+                    Discount = (double)p.Discount,
+                    Features = p.Features.Select(f => f.Feature).ToList(),
+                    FeaturesEn = p.Features.Select(f => f.FeatureEn).ToList(),
+                    SubscriberCount = (int)p.SubscriberCount,
+                    ImageUrl = p.ImageUrl,
+                    CategoryId = p.CategoryId,
+                    CategoryName = p.Category.Name,
+                    CategoryNameEN = p.Category.NameEn
+                }).ToListAsync();
 
             return Ok(packages);
         }
 
+        [HttpGet("mysubscription")]
+        public async Task<IActionResult> GetMySubscription(int userId)
+        {
+            try
+            {
+                var subscription = await _context.UserSubscriptions
+                    .Where(s => s.UserId == userId && s.IsActive)
+                    .OrderByDescending(s => s.CreatedAt)
+                    .FirstOrDefaultAsync();
+
+                if (subscription == null)
+                    return NotFound(new { message = "لا يوجد اشتراك حالي" });
+
+                var usage = await _context.subscription_usage
+                    .Where(u => u.SubscriptionId == subscription.Id)
+                    .OrderByDescending(u => u.CreatedAt)
+                    .FirstOrDefaultAsync();
+
+                var package = await _context.Packages
+                    .Include(p => p.Features)
+                    .FirstOrDefaultAsync(p => p.Name == subscription.PlanName);
+
+                if (package == null)
+                    return NotFound(new { message = "Package not found" });
+
+                var result = new
+                {
+                    subscription = new
+                    {
+                        subscription.Id,
+                        subscription.PlanName,
+                        subscription.Price,
+                        subscription.StartDate,
+                        subscription.EndDate,
+                        subscription.PaymentStatus,
+                        subscription.IsActive,
+                        DaysLeft = (subscription.EndDate - DateTime.UtcNow).Days
+                    },
+                    package = new
+                    {
+                        package.ImageUrl,
+                        package.DurationDays,
+                        package.Discount,
+                        Features = package.Features.Select(f => f.Feature).ToList(),
+                        FeaturesEn = package.Features.Select(f => f.FeatureEn).ToList(),
+                        package.SubscriberCount
+                    },
+                    usage = usage != null ? new
+                    {
+                        UsedMessages = usage.MessageCount,
+                        TotalMessages = 1000,
+                        UsedMedia = usage.MediaCount,
+                        TotalMedia = 100
+                    } : new
+                    {
+                        UsedMessages = 0,
+                        TotalMessages = 0,
+                        UsedMedia = 0,
+                        TotalMedia = 0
+                    }
+                };
+
+                return Ok(result);
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { message = "حدث خطأ في الخادم", error = ex.Message });
+            }
+        }
+
+
+
+        [HttpGet("user-subscription")]
+        public async Task<IActionResult> GetUserSubscription([FromQuery] int userId)
+        {
+            var subscription = await _context.UserSubscriptions
+                .Where(s => s.UserId == userId && s.IsActive)
+                .OrderByDescending(s => s.CreatedAt)
+                .FirstOrDefaultAsync();
+
+            if (subscription == null)
+                return NotFound(new { message = "No active subscription" });
+
+            var package = await _context.Packages
+                .FirstOrDefaultAsync(p => p.Name == subscription.PlanName);
+
+            return Ok(new
+            {
+                subscription.Id,
+                subscription.PlanName,
+                subscription.Price,
+                subscription.StartDate,
+                subscription.EndDate,
+                subscription.PaymentStatus,
+                subscription.IsActive,
+                PackageDetails = package
+            });
+        }
+
+        [HttpPost("subscribe")]
+        public async Task<IActionResult> Subscribe([FromQuery] int id, [FromQuery] int userId)
+        {
+            var pkg = await _context.Packages.FindAsync(id);
+            if (pkg == null)
+                return NotFound(new { message = "Package not found" });
+
+            var existingSubscription = await _context.UserSubscriptions
+                .FirstOrDefaultAsync(s => s.UserId == userId && s.PlanName == pkg.Name && s.IsActive);
+
+            if (existingSubscription != null)
+                return BadRequest(new { message = "1" });
+
+            var subscription = new UserSubscription
+            {
+                UserId = userId,
+                PlanName = pkg.Name,
+                Price = pkg.Price,
+                StartDate = DateTime.UtcNow,
+                EndDate = DateTime.UtcNow.AddDays(pkg.DurationDays),
+                PaymentStatus = "paid",
+                IsActive = true,
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow
+            };
+
+            _context.UserSubscriptions.Add(subscription);
+            pkg.SubscriberCount += 1;
+
+            await _context.SaveChangesAsync();
+
+            var user = await _context.Users.FindAsync(userId);
+            if (user != null)
+            {
+                user.subscreption = subscription.Id;
+                await _context.SaveChangesAsync();
+            }
+
+            return Ok(new { message = "Subscription successful", subscriptionId = subscription.Id });
+        }
+
+        [HttpPost("add-usage")]
+        public async Task<IActionResult> AddUsage([FromBody] SubscriptionUsage usage)
+        {
+            // تحقق أن الاشتراك موجود ومفعل
+            var subscription = await _context.UserSubscriptions
+                .FirstOrDefaultAsync(s => s.Id == usage.SubscriptionId && s.IsActive);
+
+            if (subscription == null)
+            {
+                return BadRequest(new { message = "Subscription not found or inactive" });
+            }
+
+            usage.CreatedAt = DateTime.UtcNow;
+
+            _context.subscription_usage.Add(usage);
+            await _context.SaveChangesAsync();
+
+            return Ok(new { message = "Usage recorded successfully" });
+        }
+
+        [HttpGet("usage-summary")]
+        public async Task<IActionResult> GetUsageSummary([FromQuery] int subscriptionId)
+        {
+            var subscription = await _context.UserSubscriptions
+                .FirstOrDefaultAsync(s => s.Id == subscriptionId && s.IsActive);
+
+            if (subscription == null)
+                return NotFound(new { message = "Subscription not found or inactive" });
+
+            var summary = await _context.subscription_usage
+                .Where(u => u.SubscriptionId == subscriptionId)
+                .GroupBy(u => u.SubscriptionId)
+                .Select(g => new
+                {
+                    TotalMessages = g.Sum(x => x.MessageCount),
+                    TotalMedia = g.Sum(x => x.MediaCount),
+                    Actions = g.Count()
+                })
+                .FirstOrDefaultAsync();
+
+            return Ok(new
+            {
+                subscription.Id,
+                subscription.PlanName,
+                subscription.StartDate,
+                subscription.EndDate,
+                subscription.Price,
+                Usage = summary ?? new { TotalMessages = 0, TotalMedia = 0, Actions = 0 }
+            });
+        }
+
+
         [HttpGet("{id}")]
-        public async Task<ActionResult<Package>> GetById(long id)
+        public async Task<ActionResult<Package>> GetById(int id)
         {
             var pkg = await _context.Packages
                 .Include(p => p.Features)
@@ -67,7 +313,7 @@ namespace MarketingSpeedAPI.Controllers
         }
 
         [HttpPut("{id}")]
-        public async Task<IActionResult> Update(long id, Package package)
+        public async Task<IActionResult> Update(int id, Package package)
         {
             if (id != package.Id) return BadRequest();
 
@@ -88,7 +334,7 @@ namespace MarketingSpeedAPI.Controllers
         }
 
         [HttpDelete("{id}")]
-        public async Task<IActionResult> Archive(long id)
+        public async Task<IActionResult> Archive(int id)
         {
             var pkg = await _context.Packages.FindAsync(id);
             if (pkg == null) return NotFound();

@@ -8,13 +8,13 @@ namespace MarketingSpeedAPI.Models
     {
         [Key]
         [Column("id")]
-        public long Id { get; set; }
+        public int Id { get; set; }
 
         [Column("PackageId")]
-        public long PackageId { get; set; }
+        public int PackageId { get; set; }
 
         [Column("UserId")]
-        public long UserId { get; set; }
+        public int UserId { get; set; }
 
         [Column("action")]
         public string Action { get; set; } = "create";

@@ -8,14 +8,19 @@ namespace MarketingSpeedAPI.Models
     {
         [Key]
         [Column("id")]
-        public long Id { get; set; }
+        public int Id { get; set; }
 
         [Column("package_id")]
-        public long PackageId { get; set; }
+        public int PackageId { get; set; }
 
-        [Required, MaxLength(255)]
         [Column("feature")]
         public string Feature { get; set; } = string.Empty;
+
+        [Column("FeatureAr")]
+        public string FeatureAr { get; set; } = string.Empty;
+
+        [Column("FeatureEn")]
+        public string FeatureEn { get; set; } = string.Empty;
 
         [Column("created_at")]
         public DateTime CreatedAt { get; set; }
@@ -24,6 +29,6 @@ namespace MarketingSpeedAPI.Models
         public DateTime UpdatedAt { get; set; }
 
         [ForeignKey("PackageId")]
-        public Package? Package { get; set; }
+        public Package Package { get; set; } = null!;
     }
 }

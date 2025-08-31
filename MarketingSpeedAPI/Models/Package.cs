@@ -11,23 +11,30 @@ namespace MarketingSpeedAPI.Models
     {
         [Key]
         [Column("id")]
-        public long Id { get; set; }
+        public int Id { get; set; }
 
-        [Required, MaxLength(255)]
         [Column("name")]
         public string Name { get; set; } = string.Empty;
+
+        public string NameEn { get; set; } = string.Empty;
+
+        [Column("DescriptionAr")]
+        public string? DescriptionAr { get; set; }
+
+        [Column("DescriptionEn")]
+        public string? DescriptionEn { get; set; }
 
         [Column("price", TypeName = "decimal(10,2)")]
         public decimal Price { get; set; }
 
         [Column("discount", TypeName = "decimal(5,2)")]
-        public decimal Discount { get; set; } = 0;
+        public decimal Discount { get; set; }
 
         [Column("duration_days")]
         public int DurationDays { get; set; }
 
         [Column("subscriber_count")]
-        public int SubscriberCount { get; set; } = 0;
+        public int SubscriberCount { get; set; }
 
         [Column("package_history")]
         public string? PackageHistory { get; set; }
@@ -50,8 +57,60 @@ namespace MarketingSpeedAPI.Models
         [Column("updated_at")]
         public DateTime UpdatedAt { get; set; }
 
+        [Column("ImageUrl")]
+        public string? ImageUrl { get; set; }
+
+        [Column("CategoryId")]
+        public int? CategoryId { get; set; }
+
+        // Navigation property
+        [ForeignKey("CategoryId")]
+        public PackageCategory? Category { get; set; }
+
         public ICollection<PackageFeature> Features { get; set; } = new List<PackageFeature>();
         public ICollection<PackageLog> Logs { get; set; } = new List<PackageLog>();
     }
+    public class PackageCategory
+    {
+        public int Id { get; set; }
+        public string? Name { get; set; } = string.Empty;
+        public string? NameEn { get; set; } = string.Empty;
 
+        // Navigation property
+        public ICollection<Package> Packages { get; set; } = new List<Package>();
+    }
+    [Table("user_subscriptions")]
+    public class UserSubscription
+    {
+        [Key]
+        [Column("Id")]
+        public int Id { get; set; }
+
+        [Column("UserId")]
+        public int UserId { get; set; }
+
+        [Column("PlanName")]
+        public string PlanName { get; set; } = string.Empty;
+
+        [Column("Price")]
+        public decimal Price { get; set; }
+
+        [Column("StartDate")]
+        public DateTime StartDate { get; set; }
+
+        [Column("EndDate")]
+        public DateTime EndDate { get; set; }
+
+        [Column("PaymentStatus")]
+        public string PaymentStatus { get; set; } = "pending";
+
+        [Column("IsActive")]
+        public bool IsActive { get; set; } = true;
+
+        [Column("CreatedAt")]
+        public DateTime CreatedAt { get; set; }
+
+        [Column("UpdatedAt")]
+        public DateTime UpdatedAt { get; set; }
+    }
 }

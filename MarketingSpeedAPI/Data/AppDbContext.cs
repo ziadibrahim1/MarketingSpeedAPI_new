@@ -29,6 +29,9 @@ namespace MarketingSpeedAPI.Data
         public DbSet<Package> Packages { get; set; }
         public DbSet<PackageFeature> PackageFeatures { get; set; }
         public DbSet<PackageLog> PackageLogs { get; set; }
+        public DbSet<PackageCategory> PackageCategories { get; set; }
+        public DbSet<UserSubscription> UserSubscriptions { get; set; }
+        public DbSet<SubscriptionUsage> subscription_usage { get; set; }
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             base.OnModelCreating(modelBuilder);
@@ -38,17 +41,17 @@ namespace MarketingSpeedAPI.Data
                .WithMany(c => c.Videos)
                .HasForeignKey(v => v.CategoryId)
                .OnDelete(DeleteBehavior.SetNull);
-            // العلاقة بين Country و Cities
+
             modelBuilder.Entity<Country>()
                 .HasMany(c => c.Cities)
                 .WithOne()
                 .HasForeignKey(c => c.CountryId);
-            // Conversation
+
             modelBuilder.Entity<Conversation>()
                 .HasMany(c => c.conversation_messages)
                 .WithOne(m => m.Conversation)
                 .HasForeignKey(m => m.ConversationId);
-            base.OnModelCreating(modelBuilder);
+                 base.OnModelCreating(modelBuilder);
 
             modelBuilder.Entity<Conversation>()
                 .HasOne(c => c.Agent)
@@ -67,6 +70,12 @@ namespace MarketingSpeedAPI.Data
                 .WithOne(l => l.Package)
                 .HasForeignKey(l => l.PackageId)
                 .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<Package>()
+               .HasOne(p => p.Category)
+               .WithMany(c => c.Packages)
+               .HasForeignKey(p => p.CategoryId)
+               .OnDelete(DeleteBehavior.Restrict);
         }
 
     }

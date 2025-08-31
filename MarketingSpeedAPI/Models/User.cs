@@ -13,6 +13,7 @@
     public required string email { get; set; }
     public  string? country { get; set; }
     public int? city { get; set; }
+    public int? subscreption { get; set; }
 
     // نوع المستخدم والمؤسسة
     public  string? user_type { get; set; } // "company" أو "individual"
