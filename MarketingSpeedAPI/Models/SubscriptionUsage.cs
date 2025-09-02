@@ -16,19 +16,24 @@ namespace MarketingSpeedAPI.Models
         [Column("SubscriptionId")]
         public int SubscriptionId { get; set; }
 
-        [Column("Channel")]
-        public string Channel { get; set; } = null!;
+        [ForeignKey("SubscriptionId")]
+        public UserSubscription Subscription { get; set; } = null!;
 
-        [Column("ActionType")]
-        public string ActionType { get; set; } = null!;
+        [Column("Channel")] // whatsapp, telegram, facebook, etc.
+        public string Channel { get; set; } = string.Empty;
+
+        [Column("SubChannel")] // whatsapp, telegram, facebook, etc.
+        public string SubChannel { get; set; } = string.Empty;
+
+        [Column("ActionType")] // message, post, media, scheduled
+        public string ActionType { get; set; } = string.Empty;
 
         [Column("MessageCount")]
-        public int MessageCount { get; set; }
-
-        [Column("MediaCount")]
-        public int MediaCount { get; set; }
+        public int MessageCount { get; set; } = 0;
+        public int MediaCount { get; set; } = 0;
 
         [Column("CreatedAt")]
-        public DateTime CreatedAt { get; set; }
+        public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     }
+
 }

@@ -64,7 +64,7 @@ namespace MarketingSpeedAPI.Controllers
                 query = query.Where(p =>
                     p.Name.Contains(keyword) ||
                     p.NameEn.Contains(keyword) ||
-                    p.Features.Any(f => f.Feature.Contains(keyword) || f.FeatureEn.Contains(keyword))
+                    p.Features.Any(f => f.feature.Contains(keyword) || f.FeatureEn.Contains(keyword))
                 );
             }
 
@@ -77,8 +77,18 @@ namespace MarketingSpeedAPI.Controllers
                     Price = (double)p.Price,
                     DurationDays = (int)p.DurationDays,
                     Discount = (double)p.Discount,
-                    Features = p.Features.Select(f => f.Feature).ToList(),
-                    FeaturesEn = p.Features.Select(f => f.FeatureEn).ToList(),
+                    Features = p.Features.Select(f => new FeatureDto
+                    {
+                        feature = f.feature ?? "",
+                        FeatureEn = f.FeatureEn ?? ""
+                    }).ToList(),
+
+                    FeaturesEn = p.Features.Select(f => new FeatureDto
+                    {
+                        feature = f.feature ?? "",
+                        FeatureEn = f.FeatureEn ?? ""
+                    }).ToList()
+,
                     SubscriberCount = (int)p.SubscriberCount,
                     ImageUrl = p.ImageUrl,
                     CategoryId = p.CategoryId,
@@ -90,75 +100,88 @@ namespace MarketingSpeedAPI.Controllers
         }
 
         [HttpGet("mysubscription")]
-        public async Task<IActionResult> GetMySubscription(int userId)
+        public async Task<IActionResult> GetMySubscriptions(int userId)
         {
             try
             {
-                var subscription = await _context.UserSubscriptions
+                var subscriptions = await _context.UserSubscriptions
                     .Where(s => s.UserId == userId && s.IsActive)
+                    .Include(s => s.Package)
+                        .ThenInclude(p => p.Features)
                     .OrderByDescending(s => s.CreatedAt)
-                    .FirstOrDefaultAsync();
+                    .ToListAsync();
 
-                if (subscription == null)
-                    return NotFound(new { message = "لا يوجد اشتراك حالي" });
+                if (!subscriptions.Any())
+                    return NotFound(new { message = "لا يوجد اشتراكات حالية" });
 
-                var usage = await _context.subscription_usage
-                    .Where(u => u.SubscriptionId == subscription.Id)
-                    .OrderByDescending(u => u.CreatedAt)
-                    .FirstOrDefaultAsync();
+                var subscriptionIds = subscriptions.Select(s => s.Id).ToList();
 
-                var package = await _context.Packages
-                    .Include(p => p.Features)
-                    .FirstOrDefaultAsync(p => p.Name == subscription.PlanName);
+                // هنجمع usage كله ونخليه جاهز للربط بالfeatures
+                var usageList = await _context.subscription_usage
+                    .Where(u => subscriptionIds.Contains(u.SubscriptionId))
+                    .ToListAsync();
 
-                if (package == null)
-                    return NotFound(new { message = "Package not found" });
-
-                var result = new
+                var results = subscriptions.Select(s =>
                 {
-                    subscription = new
-                    {
-                        subscription.Id,
-                        subscription.PlanName,
-                        subscription.Price,
-                        subscription.StartDate,
-                        subscription.EndDate,
-                        subscription.PaymentStatus,
-                        subscription.IsActive,
-                        DaysLeft = (subscription.EndDate - DateTime.UtcNow).Days
-                    },
-                    package = new
-                    {
-                        package.ImageUrl,
-                        package.DurationDays,
-                        package.Discount,
-                        Features = package.Features.Select(f => f.Feature).ToList(),
-                        FeaturesEn = package.Features.Select(f => f.FeatureEn).ToList(),
-                        package.SubscriberCount
-                    },
-                    usage = usage != null ? new
-                    {
-                        UsedMessages = usage.MessageCount,
-                        TotalMessages = 1000,
-                        UsedMedia = usage.MediaCount,
-                        TotalMedia = 100
-                    } : new
-                    {
-                        UsedMessages = 0,
-                        TotalMessages = 0,
-                        UsedMedia = 0,
-                        TotalMedia = 0
-                    }
-                };
+                    var pkg = s.Package;
 
-                return Ok(result);
+                    return new
+                    {
+                        subscription = new
+                        {
+                            s.Id,
+                            s.PlanName,
+                            s.Price,
+                            StartDate = s.StartDate.ToString("yyyy-MM-dd"),
+                            EndDate = s.EndDate.ToString("yyyy-MM-dd"),
+                            s.PaymentStatus,
+                            s.IsActive,
+                            DaysLeft = (s.EndDate.Date - DateTime.UtcNow.Date).Days
+                        },
+                        package = pkg != null ? new
+                        {
+                            pkg.Id,
+                            pkg.Name,
+                            pkg.NameEn,
+                            pkg.ImageUrl,
+                            pkg.DurationDays,
+                            pkg.Discount,
+                            Features = pkg.Features.Select(f =>
+                            {
+                                var featureUsage = usageList
+                                    .Where(u => u.SubscriptionId == s.Id &&
+                                                u.ActionType == f.ActionType &&
+                                                u.Channel == f.Channel)
+                                    .ToList();
+
+                                int usedCount = 0;
+                                if (f.ActionType == "message")
+                                    usedCount = featureUsage.Sum(u => u.MessageCount );
+                                else if (f.ActionType == "media_upload")
+                                    usedCount = featureUsage.Sum(u => u.MediaCount );
+
+                                return new
+                                {
+                                    f.feature,
+                                    f.FeatureEn,
+                                    f.Channel,
+                                    f.ActionType,
+                                    f.LimitCount,
+                                    UsedCount = usedCount
+                                };
+                            }).ToList(),
+                            pkg.SubscriberCount
+                        } : null
+                    };
+                }).ToList();
+
+                return Ok(results);
             }
             catch (Exception ex)
             {
                 return StatusCode(500, new { message = "حدث خطأ في الخادم", error = ex.Message });
             }
         }
-
 
 
         [HttpGet("user-subscription")]
@@ -196,7 +219,7 @@ namespace MarketingSpeedAPI.Controllers
                 return NotFound(new { message = "Package not found" });
 
             var existingSubscription = await _context.UserSubscriptions
-                .FirstOrDefaultAsync(s => s.UserId == userId && s.PlanName == pkg.Name && s.IsActive);
+                .FirstOrDefaultAsync(s => s.UserId == userId && s.PackageId == pkg.Id && s.IsActive);
 
             if (existingSubscription != null)
                 return BadRequest(new { message = "1" });
@@ -204,6 +227,7 @@ namespace MarketingSpeedAPI.Controllers
             var subscription = new UserSubscription
             {
                 UserId = userId,
+                PackageId = pkg.Id,
                 PlanName = pkg.Name,
                 Price = pkg.Price,
                 StartDate = DateTime.UtcNow,
@@ -263,9 +287,9 @@ namespace MarketingSpeedAPI.Controllers
                 .GroupBy(u => u.SubscriptionId)
                 .Select(g => new
                 {
-                    TotalMessages = g.Sum(x => x.MessageCount),
-                    TotalMedia = g.Sum(x => x.MediaCount),
-                    Actions = g.Count()
+                    TotalUsed = g.Sum(x => x.MessageCount),
+                    Actions = g.Count(),
+                    LastUsage = (DateTime?)g.Max(x => x.CreatedAt) // ✅ Cast إلى nullable
                 })
                 .FirstOrDefaultAsync();
 
@@ -273,10 +297,10 @@ namespace MarketingSpeedAPI.Controllers
             {
                 subscription.Id,
                 subscription.PlanName,
-                subscription.StartDate,
-                subscription.EndDate,
+                StartDate = subscription.StartDate.Date,
+                EndDate = subscription.EndDate.Date,
                 subscription.Price,
-                Usage = summary ?? new { TotalMessages = 0, TotalMedia = 0, Actions = 0 }
+                Usage = summary ?? new { TotalUsed = 0, Actions = 0, LastUsage = (DateTime?)null }
             });
         }
 

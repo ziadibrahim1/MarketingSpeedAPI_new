@@ -13,22 +13,29 @@ namespace MarketingSpeedAPI.Models
         [Column("package_id")]
         public int PackageId { get; set; }
 
-        [Column("feature")]
-        public string Feature { get; set; } = string.Empty;
-
-        [Column("FeatureAr")]
-        public string FeatureAr { get; set; } = string.Empty;
-
-        [Column("FeatureEn")]
-        public string FeatureEn { get; set; } = string.Empty;
-
-        [Column("created_at")]
-        public DateTime CreatedAt { get; set; }
-
-        [Column("updated_at")]
-        public DateTime UpdatedAt { get; set; }
-
         [ForeignKey("PackageId")]
         public Package Package { get; set; } = null!;
+
+        [Column("feature")]
+        public string? feature { get; set; }
+
+        [Column("FeatureEn")]
+        public string? FeatureEn { get; set; }
+
+        [Column("Channel")] // whatsapp, telegram, facebook, instagram, sms, email, x, haraj ...
+        public string Channel { get; set; } = string.Empty;
+
+        [Column("ActionType")] // message, post, media, scheduled
+        public string ActionType { get; set; } = "message";
+
+        [Column("LimitCount")]
+        public int LimitCount { get; set; } = 0;
+
+        [Column("created_at")]
+        public DateTime created_at { get; set; } = DateTime.UtcNow;
+
+        [Column("updated_at")]
+        public DateTime updated_at { get; set; } = DateTime.UtcNow;
     }
+
 }

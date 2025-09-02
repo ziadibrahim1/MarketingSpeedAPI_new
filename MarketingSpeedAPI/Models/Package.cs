@@ -86,8 +86,14 @@ namespace MarketingSpeedAPI.Models
         [Column("Id")]
         public int Id { get; set; }
 
+        [ForeignKey("PackageId")]
+        public Package Package { get; set; } = null!;
+
         [Column("UserId")]
         public int UserId { get; set; }
+
+        [Column("PackageId")]
+        public int PackageId { get; set; }
 
         [Column("PlanName")]
         public string PlanName { get; set; } = string.Empty;
@@ -112,5 +118,7 @@ namespace MarketingSpeedAPI.Models
 
         [Column("UpdatedAt")]
         public DateTime UpdatedAt { get; set; }
+
+        public ICollection<SubscriptionUsage> Usage { get; set; } = new List<SubscriptionUsage>();
     }
 }
