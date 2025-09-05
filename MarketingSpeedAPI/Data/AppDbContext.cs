@@ -32,6 +32,7 @@ namespace MarketingSpeedAPI.Data
         public DbSet<PackageCategory> PackageCategories { get; set; }
         public DbSet<UserSubscription> UserSubscriptions { get; set; }
         public DbSet<SubscriptionUsage> subscription_usage { get; set; }
+        public DbSet<UserAccount> user_accounts { get; set; }
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             base.OnModelCreating(modelBuilder);
