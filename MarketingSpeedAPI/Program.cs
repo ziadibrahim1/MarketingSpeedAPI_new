@@ -1,11 +1,12 @@
-﻿using MarketingSpeedAPI.Data;
+﻿using MarketingSpeedAPI.Controllers;
+using MarketingSpeedAPI.Data;
+using MarketingSpeedAPI.Models;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// ------------------------
-// 1️⃣ Configure Database
-// ------------------------
+// 1️⃣ Database
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseMySql(
         builder.Configuration.GetConnectionString("DefaultConnection"),
@@ -13,45 +14,32 @@ builder.Services.AddDbContext<AppDbContext>(options =>
     )
 );
 
-// ------------------------
-// 2️⃣ Configure Email Service
-// ------------------------
+// 2️⃣ Services
 builder.Services.Configure<EmailSettings>(builder.Configuration.GetSection("EmailSettings"));
 builder.Services.AddScoped<EmailService>();
+builder.Services.Configure<WasenderSettings>(builder.Configuration.GetSection("Wasender"));
 
-// ------------------------
-// 3️⃣ Add Controllers
-// ------------------------
+// 3️⃣ Controllers
 builder.Services.AddControllers();
 
-// ------------------------
 // 4️⃣ Logging
-// ------------------------
 builder.Logging.ClearProviders();
 builder.Logging.AddConsole();
 
-// ------------------------
 // 5️⃣ Memory Cache
-// ------------------------
 builder.Services.AddMemoryCache();
 
-// ------------------------
 // 6️⃣ Hosted Services
-// ------------------------
 builder.Services.AddHostedService<DeleteUnverifiedUsersJob>();
 
-// ------------------------
-// 7️⃣ HttpClient for API calls
-// ------------------------
+// 7️⃣ HttpClient
 builder.Services.AddHttpClient("Wasender", client =>
 {
     client.BaseAddress = new Uri(builder.Configuration["Wasender:BaseUrl"] ?? "https://www.wasenderapi.com");
     client.DefaultRequestHeaders.Add("Authorization", $"Bearer {builder.Configuration["Wasender:ApiKey"]}");
 });
 
-// ------------------------
-// 8️⃣ CORS Policy
-// ------------------------
+// 8️⃣ CORS
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowAll", policy =>
@@ -59,25 +47,24 @@ builder.Services.AddCors(options =>
               .AllowAnyHeader()
               .AllowAnyMethod());
 });
+builder.Services.Configure<TelegramOptions>(
+    builder.Configuration.GetSection("Telegram"));
 
-// ------------------------
-// 9️⃣ Build App
-// ------------------------
+// نضيف الـ Manager نفسه
+builder.Services.AddSingleton<TelegramClientManager>(sp =>
+{
+    var opts = sp.GetRequiredService<IOptions<TelegramOptions>>().Value;
+    return new TelegramClientManager(opts.ApiId, opts.ApiHash, opts.BaseDataDir);
+});
 var app = builder.Build();
 
-// ------------------------
-// 10️⃣ Middleware
-// ------------------------
+// 9️⃣ Middleware
 app.UseCors("AllowAll");
 app.UseHttpsRedirection();
 app.UseAuthorization();
 
-// ------------------------
-// 11️⃣ Map Controllers
-// ------------------------
+// 10️⃣ Map Controllers
 app.MapControllers();
 
-// ------------------------
-// 12️⃣ Run App
-// ------------------------
+// 11️⃣ Run
 app.Run();

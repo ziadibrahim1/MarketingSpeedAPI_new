@@ -19,6 +19,11 @@
 
         public int? WasenderSessionId { get; set; }
     }
+    public class WasenderSettings
+    {
+        public string BaseUrl { get; set; }
+        public string ApiKey { get; set; }
+    }
     public class ConnectQrRequest
     {
         public int UserId { get; set; }

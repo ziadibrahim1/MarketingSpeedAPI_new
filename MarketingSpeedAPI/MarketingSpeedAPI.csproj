@@ -7,6 +7,17 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Remove="td\**" />
+    <Content Remove="td\**" />
+    <EmbeddedResource Remove="td\**" />
+    <None Remove="td\**" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Remove="tdjson.dll" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="BCrypt.Net-Next" Version="4.0.3" />
     <PackageReference Include="MailKit" Version="4.13.0" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="8.0.15">
@@ -15,6 +26,12 @@
     </PackageReference>
     <PackageReference Include="Pomelo.EntityFrameworkCore.MySql" Version="8.0.3" />
     <PackageReference Include="Swashbuckle.AspNetCore" Version="8.0.0" />
+    <PackageReference Include="TDLib" Version="1.8.19" />
+    <PackageReference Include="TDLib.Api" Version="1.8.45" />
+    <PackageReference Include="tdlib.native" Version="1.8.45" />
+    <PackageReference Include="tdlib.native.win-x64" Version="1.8.45" />
+    <PackageReference Include="Uno.UI" Version="5.6.99" />
+    <PackageReference Include="WTelegramClient" Version="4.3.10" />
   </ItemGroup>
 
   <ItemGroup>
