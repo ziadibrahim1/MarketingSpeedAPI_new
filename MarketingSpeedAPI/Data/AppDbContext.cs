@@ -33,6 +33,8 @@ namespace MarketingSpeedAPI.Data
         public DbSet<UserSubscription> UserSubscriptions { get; set; }
         public DbSet<SubscriptionUsage> subscription_usage { get; set; }
         public DbSet<UserAccount> user_accounts { get; set; }
+        public DbSet<Message> Messages { get; set; } = null!;
+        public DbSet<MessageLog> MessageLogs { get; set; } = null!;
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             base.OnModelCreating(modelBuilder);
