@@ -30,6 +30,10 @@ namespace MarketingSpeedAPI.Models
 
         [Column("LimitCount")]
         public int LimitCount { get; set; } = 0;
+        [Column("sendingLimit")]
+        public int sendingLimit { get; set; } = 0;
+        [Column("PlatformId")]
+        public int PlatformId { get; set; }
 
         [Column("created_at")]
         public DateTime created_at { get; set; } = DateTime.UtcNow;

@@ -3,10 +3,11 @@ using MarketingSpeedAPI.Models;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
-using Org.BouncyCastle.Asn1.Crmf;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using RestSharp;
 using System.Text.Json;
-using TL;
+
 
 namespace MarketingSpeedAPI.Controllers
 {
@@ -17,7 +18,7 @@ namespace MarketingSpeedAPI.Controllers
         private readonly AppDbContext _context;
         private readonly RestClient _client;
         private readonly string _apiKey;
-
+        private readonly ILogger<MessagingController> _logger;
         public MessagingController(AppDbContext context, IOptions<WasenderSettings> wasenderOptions)
         {
             _context = context;
@@ -42,7 +43,7 @@ namespace MarketingSpeedAPI.Controllers
                 UserId = req.UserId,
                 Title = req.Title ?? string.Empty,
                 Body = req.Message,
-                Targets = JsonSerializer.Serialize(req.Recipients),
+                Targets = System.Text.Json.JsonSerializer.Serialize(req.Recipients),
                 Suggestions = req.Suggestions,
                 Attachments = req.Attachments,
                 Status = "pending",
@@ -86,7 +87,376 @@ namespace MarketingSpeedAPI.Controllers
             return Ok(new { success });
         }
 
-        // ===== جلب المجموعات مع الأعضاء =====
+        [HttpPost("send-to-groups/{userId}")]
+        public async Task<IActionResult> SendToGroups(ulong userId, [FromBody] SendGroupsRequest req)
+        {
+            var today = DateTime.UtcNow.Date;
+
+            var subscription = await _context.UserSubscriptions
+                .Where(s => s.UserId == (int)userId &&
+                            s.IsActive &&
+                            s.PaymentStatus == "paid" &&
+                            s.StartDate <= today &&
+                            s.EndDate >= today)
+                .OrderByDescending(s => s.EndDate)
+                .FirstOrDefaultAsync();
+
+            if (subscription == null)
+                return Ok(new { success = false, status = "0", message = "Subscription invalid" });
+
+            var account = await _context.user_accounts
+                .FirstOrDefaultAsync(a => a.UserId == (int)userId && a.PlatformId == 1 && a.Status == "connected");
+
+            if (account == null || string.IsNullOrEmpty(account.WasenderSessionId?.ToString()))
+                return Ok(new { success = false, status = "1", message = "No account found" });
+
+            var results = new List<object>();
+            var random = new Random();
+
+            string AddRandomDots(string text)
+            {
+                var options = new[] { "", ".", "..", "..." };
+                var dots = options[random.Next(options.Length)];
+                return $"{text}{dots}";
+            }
+
+            var newMessage = new Message
+            {
+                PlatformId = account.PlatformId,
+                UserId = (long)userId,
+                Title = $"Send to groups {DateTime.UtcNow:yyyyMMddHHmmss}",
+                Body = req.Message ?? "",
+                Targets = JsonConvert.SerializeObject(req.GroupIds),
+                Attachments = (req.ImageUrls == null || req.ImageUrls.Count == 0)
+                    ? null
+                    : JsonConvert.SerializeObject(req.ImageUrls),
+                Status = "pending",
+                CreatedAt = DateTime.UtcNow
+            };
+
+            _context.Messages.Add(newMessage);
+            await _context.SaveChangesAsync();
+
+            string GetMessageTypeFromExtension(string fileUrl)
+            {
+                var extension = Path.GetExtension(fileUrl).ToLower();
+                if (extension is ".jpg" or ".jpeg" or ".png" or ".gif" or ".webp")
+                    return "imageUrl";
+                else if (extension is ".mp4" or ".mov" or ".avi" or ".mkv")
+                    return "videoUrl";
+                else
+                    return "documentUrl";
+            }
+
+            async Task<RestResponse> SendWithRetryAsync(RestRequest request, int maxRetries = 3)
+            {
+                for (int retries = 0; retries < maxRetries; retries++)
+                {
+                    var response = await _client.ExecuteAsync(request);
+                    if (response.Content == null || !response.Content.Contains("retry_after"))
+                        return response;
+
+                    try
+                    {
+                        var retryAfter = JObject.Parse(response.Content)["retry_after"]?.ToObject<int>() ?? 5;
+                        Console.WriteLine($"⏳ Server says wait {retryAfter} sec before retry...");
+                        await Task.Delay(retryAfter * 1000);
+                    }
+                    catch
+                    {
+                        await Task.Delay(5000);
+                    }
+                }
+                return await _client.ExecuteAsync(request);
+            }
+
+            async Task SendAndLogAsync(string groupId, Dictionary<string, object?> body, string? fileUrl = null)
+            {
+                var request = new RestRequest("/api/send-message", Method.Post);
+                request.AddHeader("Authorization", $"Bearer {account.AccessToken}");
+                request.AddHeader("Content-Type", "application/json");
+                request.AddJsonBody(body);
+
+                var response = await SendWithRetryAsync(request);
+
+                string? externalId = null;
+                if (response.IsSuccessful && !string.IsNullOrEmpty(response.Content))
+                {
+                    try
+                    {
+                        var json = JObject.Parse(response.Content);
+                        externalId = json["data"]?["msgId"]?.ToString();
+                    }
+                    catch { }
+                }
+
+                var log = new MessageLog
+                {
+                    MessageId = newMessage.Id,
+                    Recipient = groupId,
+                    PlatformId = account.PlatformId,
+                    Status = response.IsSuccessful ? "sent" : "failed",
+                    ErrorMessage = response.IsSuccessful ? null : response.Content,
+                    AttemptedAt = DateTime.UtcNow,
+                    ExternalMessageId = externalId
+                };
+                _context.message_logs.Add(log);
+
+                if (response.IsSuccessful)
+                {
+                    newMessage.Status = "sent";
+                    newMessage.SentAt = DateTime.UtcNow;
+                    results.Add(new { groupId, fileUrl, success = true, externalId });
+                }
+                else
+                {
+                    results.Add(new { groupId, fileUrl, success = false, error = response.Content });
+                }
+
+                await _context.SaveChangesAsync();
+            }
+
+            foreach (var groupId in req.GroupIds)
+            {
+                if (req.ImageUrls != null && req.ImageUrls.Count > 0)
+                {
+                    for (int i = 0; i < req.ImageUrls.Count; i++)
+                    {
+                        bool isLast = i == req.ImageUrls.Count - 1;
+                        var msgTypeStr = GetMessageTypeFromExtension(req.ImageUrls[i]);
+
+                        var body = new Dictionary<string, object?>
+                {
+                    { "to", groupId },
+                    { msgTypeStr, req.ImageUrls[i] }
+                };
+
+                        if (isLast && !string.IsNullOrWhiteSpace(req.Message))
+                            body.Add("text", AddRandomDots(req.Message));
+
+                        await SendAndLogAsync(groupId, body, req.ImageUrls[i]);
+                    }
+                }
+                else if (!string.IsNullOrWhiteSpace(req.Message))
+                {
+                    var body = new Dictionary<string, object?>
+            {
+                { "to", groupId },
+                { "text", AddRandomDots(req.Message) }
+            };
+                    await SendAndLogAsync(groupId, body);
+                }
+
+                if (req.GroupIds.Count > 1 && groupId != req.GroupIds.Last())
+                {
+                    int delay = random.Next(5000, 7001);
+                    await Task.Delay(delay);
+                }
+            }
+
+            if (newMessage.Status == "pending")
+                newMessage.Status = "failed";
+
+            await _context.SaveChangesAsync();
+
+            return Ok(new
+            {
+                success = true,
+                status = "2",
+                message = newMessage.Body,
+                newMessageId = newMessage.Id,
+                results
+            });
+        }
+
+
+        [HttpPut("edit-message/{messageId}")]
+        public async Task<IActionResult> EditMessage(long messageId, [FromBody] EditMessageRequest req)
+        {
+            var message = await _context.Messages.FirstOrDefaultAsync(m => m.Id == messageId);
+            if (message == null)
+                return NotFound(new { success = false, message = "Message not found" });
+
+            message.Body = req.Message;
+            _context.Messages.Update(message);
+
+            var logs = await _context.message_logs
+                .Where(l => l.MessageId == messageId )
+                .ToListAsync();
+
+            foreach (var log in logs)
+            {
+                var account = await _context.user_accounts
+                    .FirstOrDefaultAsync(a => a.UserId == message.UserId && a.PlatformId == log.PlatformId);
+
+                if (account == null || !account.WasenderSessionId.HasValue)
+                    continue;
+
+                var request = new RestRequest($"/api/messages/{log.ExternalMessageId}", Method.Put);
+                request.AddHeader("Authorization", $"Bearer {account.AccessToken}");
+                request.AddHeader("Content-Type", "application/json");
+                request.AddJsonBody(new { text = req.Message });
+
+                var response = await _client.ExecuteAsync(request);
+                if (!response.IsSuccessful)
+                {
+                    log.Status = "failed";
+                    log.ErrorMessage = response.Content;
+                }
+                else
+                {
+                    log.Status = "sent";
+                    log.ErrorMessage = null;
+                }
+
+                _context.message_logs.Update(log);
+                await Task.Delay(5000);
+
+            }
+
+            await _context.SaveChangesAsync();
+            return Ok(new { success = true, message = "Message updated for all recipients" });
+        }
+
+      
+        [HttpDelete("delete-message/{messageId}/{PlatformId}/{UserId}")]
+        public async Task<IActionResult> DeleteMessage(long messageId, long UserId, long PlatformId)
+        {
+            var logs = await _context.message_logs
+                .Where(l => l.MessageId == messageId )
+                .ToListAsync();
+            if (!logs.Any())
+                return NotFound(new { success = false, message = "No logs found for this message" });
+            foreach (var log in logs)
+            {
+                var account = await _context.user_accounts
+                    .FirstOrDefaultAsync(a => a.UserId == UserId && a.PlatformId == PlatformId);
+                if (account == null || !account.WasenderSessionId.HasValue)
+                    continue;
+                var request = new RestRequest($"/api/messages/{log.ExternalMessageId}", Method.Delete);
+                request.AddHeader("Authorization", $"Bearer {account.AccessToken}");
+                var response = await _client.ExecuteAsync(request);
+                if (!response.IsSuccessful)
+                {
+                    log.ErrorMessage = response.Content;
+                    log.Status = "failed";
+                    _context.message_logs.Update(log);
+                }
+                else
+                {
+                    _context.message_logs.Remove(log);
+                }
+                await Task.Delay(5000);
+
+            }
+
+            var remainingLogs = await _context.message_logs.AnyAsync(l => l.MessageId == messageId);
+            if (!remainingLogs)
+            {
+                var message = await _context.Messages.FirstOrDefaultAsync(m => m.Id == messageId);
+                if (message != null)
+                    _context.Messages.Remove(message);
+            }
+
+            await _context.SaveChangesAsync();
+
+            return Ok(new { success = true, message = "Message deleted for all recipients" });
+        }
+
+
+        [HttpGet("check-packege-account/{userId}")]
+        public async Task<IActionResult> CheckPackegeAccount(ulong userId)
+        {
+            var today = DateTime.UtcNow.Date;
+
+            var subscription = await _context.UserSubscriptions
+                .Where(s => s.UserId == (int)userId &&
+                            s.IsActive &&
+                            s.PaymentStatus == "paid" &&
+                            s.StartDate <= today &&
+                            s.EndDate >= today)
+                .OrderByDescending(s => s.EndDate)
+                .FirstOrDefaultAsync();
+
+            if (subscription == null)
+                return Ok(new { success = false, status = "0", message = "No active subscription" });
+
+            var account = await _context.user_accounts
+                .FirstOrDefaultAsync(a => a.UserId == (int)userId && a.PlatformId == 1 && a.Status == "connected");
+
+            if (account == null )
+                return Ok(new { success = true, status = "0", message = "No account found" });
+
+            try
+            {
+                var request = new RestRequest($"/api/status", Method.Get);
+                request.AddHeader("Authorization", $"Bearer {account.AccessToken}");
+
+                var response = await _client.ExecuteAsync(request);
+
+                if (!response.IsSuccessful || string.IsNullOrEmpty(response.Content))
+                {
+                    return Ok(new { success = false, status = "0", message = "Wasender not reachable" });
+                }
+
+                var json = System.Text.Json.JsonDocument.Parse(response.Content);
+                var wasenderStatus = json.RootElement.GetProperty("status").GetString();
+
+                if (wasenderStatus != "connected")
+                {
+                    // ممكن تحدث الحالة في DB لو حابب
+                    account.Status = "disconnected";
+                    await _context.SaveChangesAsync();
+
+                    return Ok(new { success = false, status = "0", message = "Wasender session not connected" });
+                }
+            }
+            catch (Exception ex)
+            {
+                return Ok(new { success = false, status = "0", message = "Error connecting to Wasender", error = ex.Message });
+            }
+
+            var features = await _context.PackageFeatures
+                .Where(f => f.PackageId == subscription.PackageId && f.PlatformId == 1)
+                .ToListAsync();
+
+            var usage = await _context.subscription_usage
+                .Where(u => u.UserId == (int)userId && u.SubscriptionId == subscription.Id)
+                .GroupBy(u => u.featureId)
+                .Select(g => new
+                {
+                    FeatureId = g.Key,
+                    TotalMessage = g.Sum(x => x.MessageCount),
+                    TotalMedia = g.Sum(x => x.MediaCount)
+                })
+                .ToListAsync();
+
+            var featuresWithLimits = features.Select(f =>
+            {
+                var u = usage.FirstOrDefault(x => x.FeatureId == f.Id);
+                return new
+                {
+                    f.Id,
+                    f.feature,
+                    LimitCount = f.LimitCount,
+                    sendingLimit = f.sendingLimit,
+                    CurrentMessageUsage = u?.TotalMessage ?? 0,
+                    CurrentSendingUsage = u?.TotalMedia ?? 0,
+                    IsMessageLimitExceeded = u != null && u.TotalMessage > f.LimitCount,
+                    IsMediaLimitExceeded = u != null && u.TotalMedia > f.sendingLimit
+                };
+            });
+
+            return Ok(new
+            {
+                success = true,
+                status = "1",
+                message = "Ok",
+                features = featuresWithLimits
+            });
+        }
+
+
         [HttpGet("groups-with-members/{userId}/{platformId}")]
         public async Task<IActionResult> GetGroupsWithMembers(ulong userId, int platformId)
         {
@@ -147,6 +517,7 @@ namespace MarketingSpeedAPI.Controllers
 
             return Ok(result);
         }
+
         [HttpGet("groups/{userId}/{platformId}")]
         public async Task<IActionResult> GetGroups(ulong userId, int platformId)
         {
@@ -156,30 +527,96 @@ namespace MarketingSpeedAPI.Controllers
             if (account == null || account.WasenderSessionId == null)
                 return NotFound();
 
-            // 1) هات المجموعات
-            var groupsRequest = new RestRequest($"/api/groups", Method.Get);
+            var groupsRequest = new RestRequest("/api/groups", Method.Get);
             groupsRequest.AddHeader("Authorization", $"Bearer {account.AccessToken}");
             var groupsResp = await _client.ExecuteAsync(groupsRequest);
 
             if (!groupsResp.IsSuccessful)
                 return StatusCode((int)groupsResp.StatusCode, groupsResp.Content);
 
+            var groupsJson = JsonDocument.Parse(groupsResp.Content);
             var result = new List<object>();
 
-            var groupsJson = JsonDocument.Parse(groupsResp.Content);
             if (groupsJson.RootElement.TryGetProperty("data", out var groups))
             {
-                // نجهز التاسكات لكل الجروبات
-                var tasks = groups.EnumerateArray().Select(async g =>
+                result = groups.EnumerateArray()
+                    .Select(g => new
+                    {
+                        id = g.GetProperty("id").GetString(),
+                        name = g.GetProperty("name").GetString() ?? "Unnamed Group"
+                    })
+                    .ToList<object>();
+            }
+
+            return Ok(result);
+        }
+
+        [HttpGet("groups/{userId}/{platformId}/{groupId}/membersCount")]
+        public async Task<IActionResult> GetGroupMembersCount(ulong userId, int platformId, string groupId)
+        {
+            var account = await _context.user_accounts
+                .FirstOrDefaultAsync(a => a.UserId == (int)userId && a.PlatformId == platformId);
+
+            if (account == null || account.WasenderSessionId == null)
+                return NotFound();
+
+            var metaRequest = new RestRequest($"/api/groups/{groupId}/metadata", Method.Get);
+            metaRequest.AddHeader("Authorization", $"Bearer {account.AccessToken}");
+            var metaResp = await _client.ExecuteAsync(metaRequest);
+
+            if (!metaResp.IsSuccessful)
+                return StatusCode((int)metaResp.StatusCode, metaResp.Content);
+
+            var metaJson = JsonDocument.Parse(metaResp.Content);
+            int memberCount = 0;
+
+            if (metaJson.RootElement.TryGetProperty("data", out var meta) &&
+                meta.TryGetProperty("participants", out var participants))
+            {
+                memberCount = participants.GetArrayLength();
+            }
+
+            return Ok(new { groupId, membersCount = memberCount });
+        }
+
+        [HttpGet("groups/membersCount/{userId}/{platformId}")]
+        public async Task<IActionResult> GetGroupsMembersCount(ulong userId, int platformId)
+        {
+            var account = await _context.user_accounts
+                .FirstOrDefaultAsync(a => a.UserId == (int)userId && a.PlatformId == platformId);
+
+            if (account == null || account.WasenderSessionId == null)
+                return NotFound();
+
+            // أولاً جلب كل الجروبات
+            var groupsRequest = new RestRequest("/api/groups", Method.Get);
+            groupsRequest.AddHeader("Authorization", $"Bearer {account.AccessToken}");
+            var groupsResp = await _client.ExecuteAsync(groupsRequest);
+
+            if (!groupsResp.IsSuccessful)
+                return StatusCode((int)groupsResp.StatusCode, groupsResp.Content);
+
+            var groupsJson = JsonDocument.Parse(groupsResp.Content);
+            var groupIds = new List<string>();
+
+            if (groupsJson.RootElement.TryGetProperty("data", out var groups))
+            {
+                groupIds = groups.EnumerateArray()
+                    .Select(g => g.GetProperty("id").GetString())
+                    .Where(id => id != null)
+                    .Select(id => id!)
+                    .ToList();
+            }
+
+            var semaphore = new SemaphoreSlim(5); // عدد الـ requests المتوازية
+            var tasks = groupIds.Select(async groupId =>
+            {
+                await semaphore.WaitAsync();
+                try
                 {
-                    var groupName = g.GetProperty("name").GetString() ?? "Unnamed Group";
-                    var groupId = g.GetProperty("id").GetString();
-
                     int memberCount = 0;
-
                     try
                     {
-                        // 2) API metadata لجلب الأعضاء
                         var metaRequest = new RestRequest($"/api/groups/{groupId}/metadata", Method.Get);
                         metaRequest.AddHeader("Authorization", $"Bearer {account.AccessToken}");
                         var metaResp = await _client.ExecuteAsync(metaRequest);
@@ -194,59 +631,73 @@ namespace MarketingSpeedAPI.Controllers
                             }
                         }
                     }
-                    catch { /* تجاهل أي خطأ في جروب */ }
+                    catch { }
 
                     return new
                     {
                         id = groupId,
-                        name = groupName,
                         membersCount = memberCount
                     };
-                });
+                }
+                finally
+                {
+                    semaphore.Release();
+                }
+            });
 
-                // نشغل كل التاسكات مع بعض
-                result = (await Task.WhenAll(tasks)).ToList<object>();
-            }
-
+            var result = (await Task.WhenAll(tasks)).ToList();
             return Ok(result);
         }
-        // ===== جلب أعضاء مجموعة محددة حسب JID =====
-        [HttpGet("group-members/{userId}/{platformId}/{groupJid}")]
-        public async Task<IActionResult> GetGroupMembersByGroupJid(ulong userId, int platformId, string groupJid)
+
+
+        [HttpGet("group-members/{userId}/{groupJid}")]
+        public async Task<IActionResult> GetGroupMembersByGroupJid(ulong userId, string groupJid)
         {
-            // جلب حساب الواتساب للمستخدم
             var account = await _context.user_accounts
-                .FirstOrDefaultAsync(a => a.UserId == (int)userId && a.PlatformId == platformId);
+                .FirstOrDefaultAsync(a => a.UserId == (int)userId && a.PlatformId == 1);
 
             if (account == null || account.WasenderSessionId == null)
                 return NotFound(new { success = false, message = "No active WhatsApp session" });
 
-            // إنشاء طلب RestSharp لجلب أعضاء المجموعة
-            var request = new RestRequest($"/api/groups/{account.WasenderSessionId}/{groupJid}/members", Method.Get);
+            var request = new RestRequest($"/api/groups/{groupJid}/participants", Method.Get);
             request.AddHeader("Authorization", $"Bearer {account.AccessToken}");
             var resp = await _client.ExecuteAsync(request);
 
             if (!resp.IsSuccessful)
                 return StatusCode((int)resp.StatusCode, resp.Content);
 
-            // تحويل JSON إلى قائمة من الأعضاء (أرقام فقط بدون @s.whatsapp.net)
-            var membersList = new List<string>();
+            var membersList = new List<object>();
             var membersJson = JsonDocument.Parse(resp.Content);
+
             if (membersJson.RootElement.TryGetProperty("data", out var members))
             {
                 foreach (var m in members.EnumerateArray())
                 {
-                    var memberStr = m.GetString() ?? string.Empty;
-                    // استخراج الرقم فقط قبل '@'
-                    var numberOnly = memberStr.Split('@')[0];
-                    membersList.Add(numberOnly);
+                    var id = m.GetProperty("id").GetString();
+                    var jid = m.GetProperty("jid").GetString();
+                    var lid = m.GetProperty("lid").GetString();
+                    var admin = m.TryGetProperty("admin", out var adminProp) && adminProp.ValueKind != JsonValueKind.Null
+                                ? adminProp.GetString()
+                                : null;
+
+                    // استخرج الرقم فقط من id (قبل @)
+                    var numberOnly = jid?.Split('@')[0];
+
+                    membersList.Add(new
+                    {
+                        Number = numberOnly,
+                        Id = id,
+                        Jid = jid,
+                        Lid = lid,
+                        Admin = admin
+                    });
                 }
             }
 
             return Ok(new { success = true, data = membersList });
         }
 
-        // ===== جلب دردشات المستخدم =====
+
         [HttpGet("chats/{userId}/{platformId}")]
         public async Task<IActionResult> GetChats(ulong userId, int platformId)
         {
@@ -256,14 +707,301 @@ namespace MarketingSpeedAPI.Controllers
             if (account == null || account.WasenderSessionId == null)
                 return NotFound();
 
-            var request = new RestRequest($"/api/chats/{account.WasenderSessionId}", Method.Get);
+            var request = new RestRequest($"/api/contacts", Method.Get);
             request.AddHeader("Authorization", $"Bearer {account.AccessToken}");
             var resp = await _client.ExecuteAsync(request);
 
             if (!resp.IsSuccessful)
                 return StatusCode((int)resp.StatusCode, resp.Content);
 
-            return Ok(resp.Content);
+            var data = JsonConvert.DeserializeObject<object>(resp.Content!);
+            return Ok(data);
+        }
+        [HttpGet("get-chats/{userId}")]
+        public async Task<IActionResult> GetChats(long userId)
+        {
+            var account = await _context.user_accounts
+                .FirstOrDefaultAsync(a => a.UserId == (int)userId && a.PlatformId == 1 && a.Status == "connected");
+
+            if (account == null)
+                return Ok(new { success = false, message = "No connected account found" });
+
+            try
+            {
+                var request = new RestRequest($"/api/contacts", Method.Get);
+                request.AddHeader("Authorization", $"Bearer {account.AccessToken}");
+
+                var response = await _client.ExecuteAsync(request);
+
+                if (!response.IsSuccessful || string.IsNullOrEmpty(response.Content))
+                    return Ok(new { success = false, message = "Failed to fetch contacts from Wasender" });
+
+                var root = JsonDocument.Parse(response.Content).RootElement;
+
+                JsonElement arrayElement = default;
+                bool haveArray = false;
+
+                if (root.ValueKind == JsonValueKind.Array)
+                {
+                    arrayElement = root;
+                    haveArray = true;
+                }
+                else if (root.TryGetProperty("data", out var dataProp))
+                {
+                    if (dataProp.ValueKind == JsonValueKind.Array)
+                    {
+                        arrayElement = dataProp;
+                        haveArray = true;
+                    }
+                    else if (dataProp.ValueKind == JsonValueKind.Object &&
+                             dataProp.TryGetProperty("data", out var innerData) &&
+                             innerData.ValueKind == JsonValueKind.Array)
+                    {
+                        arrayElement = innerData;
+                        haveArray = true;
+                    }
+                }
+
+                if (!haveArray)
+                {
+                    return Ok(new { success = true, message = "Chats fetched successfully", data = Array.Empty<object>() });
+                }
+
+                var allowedPrefixes = new List<string>
+{
+    "20",   // مصر
+    "966",  // السعودية
+    "971",  // الإمارات
+    "974",  // قطر
+    "973",  // البحرين
+    "965",  // الكويت
+    "968",  // عمان
+    "967",  // اليمن
+    "962",  // الأردن
+    "961",  // لبنان
+    "963",  // سوريا
+    "964",  // العراق
+    "970",  // فلسطين
+    "249",  // السودان
+    "218",  // ليبيا
+    "213",  // الجزائر
+    "212",  // المغرب
+    "216",  // تونس
+    "222",  // موريتانيا
+    "252",  // الصومال
+    "253",  // جيبوتي
+    "269"   // جزر القمر
+};
+
+
+                var validChats = new List<JsonElement>();
+
+                foreach (var item in arrayElement.EnumerateArray())
+                {
+                    string? rawJid = null;
+                    if (item.TryGetProperty("jid", out var jidProp) && jidProp.ValueKind == JsonValueKind.String)
+                        rawJid = jidProp.GetString();
+                    else if (item.TryGetProperty("id", out var idProp) && idProp.ValueKind == JsonValueKind.String)
+                        rawJid = idProp.GetString();
+
+                    if (string.IsNullOrEmpty(rawJid))
+                        continue;
+
+                    var phonePart = rawJid.Contains('@')
+                        ? rawJid.Substring(0, rawJid.IndexOf('@'))
+                        : rawJid;
+
+                    var clean = new string(phonePart.Where(char.IsDigit).ToArray());
+
+                    if (string.IsNullOrEmpty(clean)) continue;
+                    if (!clean.All(char.IsDigit)) continue;
+                    if (clean.Length < 8 || clean.Length > 15) continue;
+
+                    // التحقق من أن الرقم يبدأ بأحد المفاتيح المسموحة
+                    if (!allowedPrefixes.Any(prefix => clean.StartsWith(prefix)))
+                        continue;
+
+                    validChats.Add(item);
+                }
+
+
+                return Ok(new
+                {
+                    success = true,
+                    message = "Chats fetched successfully",
+                    data = validChats
+                });
+            }
+            catch (Exception ex)
+            {
+                return Ok(new { success = false, message = "Error fetching chats", error = ex.Message });
+            }
+        }
+
+        [HttpPost("send-to-members")]
+        public async Task<IActionResult> SendToMembers([FromBody] SendMembersRequest req)
+        {
+            if (req.Recipients == null || req.Recipients.Count == 0)
+                return BadRequest(new { success = false, message = "No recipients provided" });
+
+            var account = await _context.user_accounts
+                .FirstOrDefaultAsync(a => a.UserId == (int)req.UserId &&
+                                          a.PlatformId == req.PlatformId &&
+                                          a.Status == "connected");
+
+            if (account == null || string.IsNullOrEmpty(account.WasenderSessionId?.ToString()))
+                return Ok(new { success = false, status = "1", message = "No account found" });
+
+            var uniqueRecipients = req.Recipients.Distinct().ToList();
+
+            var newMessage = new Message
+            {
+                PlatformId = req.PlatformId,
+                UserId = (long)req.UserId,
+                Title = $"Send to members {DateTime.UtcNow:yyyyMMddHHmmss}",
+                Body = req.Message,
+                Targets = JsonConvert.SerializeObject(uniqueRecipients),
+                Attachments = (req.ImageUrls == null || req.ImageUrls.Count == 0)
+                    ? null
+                    : JsonConvert.SerializeObject(req.ImageUrls),
+                Status = "pending",
+                CreatedAt = DateTime.UtcNow
+            };
+
+            _context.Messages.Add(newMessage);
+            await _context.SaveChangesAsync(); 
+
+            var results = new List<object>();
+            var logs = new List<MessageLog>();
+
+            string GetRandomDotSuffix()
+            {
+                var options = new[] { "", ".", "..", "..." };
+                return options[Random.Shared.Next(options.Length)];
+            }
+
+            string CleanText(string text)
+            {
+                return text.TrimEnd('.', '…', '!', '?', '؟');
+            }
+
+            int GetRandomDelayMillis(int minSec = 5, int maxSec =8)
+            {
+                return Random.Shared.Next(minSec, maxSec + 1) * 1000;
+            }
+
+            foreach (var number in uniqueRecipients)
+            {
+                var body = new Dictionary<string, object?> { { "to", number } };
+
+                string? finalText = null;
+                if (!string.IsNullOrWhiteSpace(req.Message))
+                {
+                    finalText = CleanText(req.Message) + GetRandomDotSuffix();
+                }
+
+                if (req.ImageUrls != null && req.ImageUrls.Count > 0)
+                {
+                    var lastUrl = req.ImageUrls.Last();
+                    foreach (var img in req.ImageUrls)
+                    {
+                        var ext = Path.GetExtension(img).ToLower();
+                        string msgType = ext is ".jpg" or ".jpeg" or ".png" or ".gif" or ".webp"
+                            ? "imageUrl"
+                            : ext is ".mp4" or ".mov" or ".avi" or ".mkv"
+                                ? "videoUrl"
+                                : "documentUrl";
+
+                        body[msgType] = img;
+
+                        if (img == lastUrl && finalText != null)
+                            body["text"] = finalText;
+                    }
+                }
+                else if (finalText != null)
+                {
+                    body["text"] = finalText;
+                }
+
+                var request = new RestRequest("/api/send-message", Method.Post);
+                request.AddHeader("Authorization", $"Bearer {account.AccessToken}");
+                request.AddHeader("Content-Type", "application/json");
+                request.AddJsonBody(body);
+
+                var response = await _client.ExecuteAsync(request);
+
+                string? externalId = null;
+                if (response.IsSuccessful && !string.IsNullOrEmpty(response.Content))
+                {
+                    try
+                    {
+                        var json = JObject.Parse(response.Content);
+                        externalId = json["data"]?["msgId"]?.ToString();
+                    }
+                    catch { }
+                }
+
+                logs.Add(new MessageLog
+                {
+                    MessageId = newMessage.Id,
+                    Recipient = number,
+                    PlatformId = account.PlatformId,
+                    Status = response.IsSuccessful ? "sent" : "failed",
+                    ErrorMessage = response.IsSuccessful ? null : response.Content,
+                    AttemptedAt = DateTime.UtcNow,
+                    ExternalMessageId = externalId
+                });
+
+                if (response.IsSuccessful)
+                {
+                    results.Add(new { number, success = true, externalId });
+                }
+                else
+                {
+                    results.Add(new { number, success = false, error = response.Content });
+                }
+
+                await Task.Delay(GetRandomDelayMillis());
+            }
+
+            _context.message_logs.AddRange(logs);
+
+            newMessage.Status = logs.Any(l => l.Status == "sent") ? "sent" : "failed";
+            newMessage.SentAt = DateTime.UtcNow;
+
+            await _context.SaveChangesAsync();
+
+            return Ok(new
+            {
+                success = true,
+                status = "2",
+                message = newMessage.Body,
+                newMessageId = newMessage.Id,
+                results
+            });
+        }
+
+        private static int GetRandomDelayMillis(int minSeconds = 5, int maxSeconds = 15)
+        {
+            // Random.Shared متوفر في .NET 6+. بديل: new Random() لكنه قد يسبب نفس البذرة لو تتنادى كثير.
+            int sec = Random.Shared.Next(minSeconds, maxSeconds + 1); // شاملة الحد الأقصى
+            return sec * 1000;
+        }
+
+        private static string GetRandomDotSuffix()
+        {
+            // خيارات اللاحقة: لا شيء، ".", "..", "..."
+            var options = new[] { "", ".", "..", "..." };
+            var suffix = options[Random.Shared.Next(options.Length)];
+            return suffix;
+        }
+
+        // Optional: دالة تساعد تتأكد إننا ما نضيفش نقاط فوق نقاط موجودة (نزيل نقاط زائدة في النهاية قبل الإضافة)
+        private static string TrimTrailingDotsAndPunctuation(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return text;
+            // نشيل فقط علامات النقاط/تعجب/استفهام عربية وانجليزية من آخر النص
+            return text.TrimEnd('.', '…', '!', '?', '؟');
         }
     }
 }

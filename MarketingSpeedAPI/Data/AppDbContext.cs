@@ -34,7 +34,14 @@ namespace MarketingSpeedAPI.Data
         public DbSet<SubscriptionUsage> subscription_usage { get; set; }
         public DbSet<UserAccount> user_accounts { get; set; }
         public DbSet<Message> Messages { get; set; } = null!;
-        public DbSet<MessageLog> MessageLogs { get; set; } = null!;
+        public DbSet<MessageLog> message_logs { get; set; } = null!;
+        public DbSet<UserImage> UserImages { get; set; }
+        public DbSet<MessageAttachment> MessageAttachments { get; set; } = null!;
+        public DbSet<MarketingMessage> marketing_messages { get; set; }
+
+        public DbSet<OurGroupsCountry> categories { get; set; }
+        public DbSet<OurGroupsCategory> countries { get; set; }
+        public DbSet<CompanyGroup> company_groups { get; set; }
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             base.OnModelCreating(modelBuilder);
@@ -79,6 +86,34 @@ namespace MarketingSpeedAPI.Data
                .WithMany(c => c.Packages)
                .HasForeignKey(p => p.CategoryId)
                .OnDelete(DeleteBehavior.Restrict);
+
+            modelBuilder.Entity<MessageAttachment>()
+            .HasOne(ma => ma.Message)
+            .WithMany()
+            .HasForeignKey(ma => ma.MessageId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<MessageAttachment>()
+                .HasOne(ma => ma.UserImage)
+                .WithMany()
+                .HasForeignKey(ma => ma.ImageId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<Category>()
+            .HasMany(c => c.MarketingMessages)
+            .WithOne(m => m.Category)
+            .HasForeignKey(m => m.CategoryId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<CompanyGroup>()
+            .HasOne(cg => cg.OurGroupsCountry)
+            .WithMany(c => c.CompanyGroups)
+            .HasForeignKey(cg => cg.CountryId);
+
+            modelBuilder.Entity<CompanyGroup>()
+                .HasOne(cg => cg.OurGroupsCategory)
+                .WithMany(c => c.CompanyGroups)
+                .HasForeignKey(cg => cg.CategoryId);
         }
 
     }

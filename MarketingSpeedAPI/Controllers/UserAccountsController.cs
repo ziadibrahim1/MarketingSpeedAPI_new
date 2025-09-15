@@ -33,6 +33,25 @@ namespace MarketingSpeedAPI.Controllers
         [HttpPost("create-session")]
         public async Task<IActionResult> CreateSession([FromBody] CreateSessionRequests req)
         {
+            // ✅ تحقق أولاً من أن المستخدم عنده باقة نشطة ومدفوعة
+            var hasActiveSubscription = await _context.UserSubscriptions.AnyAsync(s =>
+                s.UserId == req.UserId &&
+                s.IsActive == true &&
+                s.PaymentStatus == "paid" &&
+                s.StartDate <= DateTime.UtcNow.Date &&
+                s.EndDate >= DateTime.UtcNow.Date
+            );
+
+            if (!hasActiveSubscription)
+            {
+                return BadRequest(new
+                {
+                    success = false,
+                    message = "0"
+                });
+            }
+
+            // ✅ تحقق هل فيه حساب موجود للمستخدم بنفس المنصة
             var existingAccount = await _context.user_accounts
                 .FirstOrDefaultAsync(a => a.UserId == req.UserId && a.PlatformId == req.PlatformId);
 
@@ -47,7 +66,6 @@ namespace MarketingSpeedAPI.Controllers
                 });
             }
 
-            // 📌 لو الحساب موجود بس WasenderSessionId = null → اعمل سيشن جديد
             if (existingAccount != null && existingAccount.WasenderSessionId == null)
             {
                 var bodyNewSession = JsonContent.Create(new
@@ -55,7 +73,7 @@ namespace MarketingSpeedAPI.Controllers
                     name = req.Name,
                     phone_number = req.PhoneNumber,
                     log_messages = req.LogMessages,
-                    account_protection = req.AccountProtection,
+                    account_protection =false,
                     read_incoming_messages = true,
                 });
 
@@ -89,14 +107,14 @@ namespace MarketingSpeedAPI.Controllers
                 });
             }
 
-            // 📌 لو الحساب موجود لكن برقم مختلف
+            // 📌 لو الحساب موجود لكن برقم مختلف → تحديث
             if (existingAccount != null && existingAccount.AccountIdentifier != req.PhoneNumber)
             {
                 var updateBody = new
                 {
                     name = req.Name,
                     phone_number = req.PhoneNumber,
-                    account_protection = req.AccountProtection,
+                    account_protection = false,
                     log_messages = req.LogMessages,
                     read_incoming_messages = true,
                 };
@@ -143,7 +161,7 @@ namespace MarketingSpeedAPI.Controllers
                 name = req.Name,
                 phone_number = req.PhoneNumber,
                 log_messages = req.LogMessages,
-                account_protection = req.AccountProtection,
+                account_protection = false,
                 read_incoming_messages = true,
             });
 
@@ -223,12 +241,35 @@ namespace MarketingSpeedAPI.Controllers
         [HttpGet("check-status/{userId:int}/{platformId:int}")]
         public async Task<IActionResult> CheckStatus(int userId, int platformId)
         {
+            // ✅ تحقق أولاً من أن الاشتراك نشط وغير منتهي
+            var today = DateTime.UtcNow.Date;
+
+            var subscription = await _context.UserSubscriptions
+                .Where(s => s.UserId == userId &&
+                            s.IsActive &&
+                            s.PaymentStatus == "paid" &&
+                            s.StartDate <= today &&
+                            s.EndDate >= today)
+                .OrderByDescending(s => s.EndDate)
+                .FirstOrDefaultAsync();
+
+            if (subscription == null)
+            {
+                return BadRequest(new
+                {
+                    success = false,
+                     status = "Expired"
+                });
+            }
+
+            // ✅ تحقق من الحساب
             var account = await _context.user_accounts
                 .FirstOrDefaultAsync(a => a.UserId == userId && a.PlatformId == platformId);
 
             if (account == null || account.WasenderSessionId == null)
                 return NotFound(new { success = false, message = "No session found" });
 
+            // ✅ استدعاء API الخاص بـ Wasender
             var resp = await _client.GetAsync($"/api/whatsapp-sessions/{account.WasenderSessionId}");
             var content = await resp.Content.ReadAsStringAsync();
 
@@ -238,6 +279,7 @@ namespace MarketingSpeedAPI.Controllers
             var data = JsonDocument.Parse(content);
             var status = data.RootElement.GetProperty("data").GetProperty("status").GetString();
 
+            // ✅ تحديث الحالة في قاعدة البيانات
             account.Status = status;
             account.LastActivity = DateTime.UtcNow;
             if (status == "connected")
@@ -248,10 +290,10 @@ namespace MarketingSpeedAPI.Controllers
             return Ok(new
             {
                 success = true,
-                status
+                status,
+                subscriptionValidUntil = subscription.EndDate
             });
         }
-
 
         [HttpPost("logout/{userId:int}/{platformId:int}")]
         public async Task<IActionResult> Logout(int userId, int platformId)

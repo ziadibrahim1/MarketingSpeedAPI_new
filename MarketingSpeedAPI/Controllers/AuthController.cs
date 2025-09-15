@@ -591,5 +591,36 @@ namespace MarketingSpeedAPI.Controllers
 
             return Ok(notifications);
         }
+
+        [HttpGet("categories")]
+        public async Task<IActionResult> GetCategories()
+        {
+            var categories = await _context.Categories
+                .Where(c => c.IsActive)
+                .Select(c => new {
+                    id = c.Id,
+                    nameAr = c.NameAr,
+                    nameEn = c.NameEn
+                })
+                .ToListAsync();
+
+            return Ok(categories);
+        }
+
+        [HttpGet("categories/{id}/GetSugestion")]
+        public async Task<IActionResult> GetSugestion(int id)
+        {
+            var messages = await _context.marketing_messages
+                .Where(m => m.CategoryId == id && m.IsActive)
+                .Select(m => new {
+                    id = m.Id,
+                    messageAr = m.MessageAr,
+                    messageEn = m.MessageEn
+                })
+                .ToListAsync();
+
+            return Ok(messages);
+        }
+
     }
 }

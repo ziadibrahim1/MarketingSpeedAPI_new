@@ -30,6 +30,11 @@ namespace MarketingSpeedAPI.Models
 
         [Column("MessageCount")]
         public int MessageCount { get; set; } = 0;
+
+        [Column("featureId")]
+        public int featureId { get; set; }
+
+        [Column("MediaCount")]
         public int MediaCount { get; set; } = 0;
 
         [Column("CreatedAt")]
