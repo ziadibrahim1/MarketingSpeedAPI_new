@@ -1,5 +1,6 @@
 ﻿using MarketingSpeedAPI.Controllers;
 using MarketingSpeedAPI.Data;
+using MarketingSpeedAPI.Hubs;
 using MarketingSpeedAPI.Models;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
@@ -42,29 +43,33 @@ builder.Services.AddHttpClient("Wasender", client =>
 // 8️⃣ CORS
 builder.Services.AddCors(options =>
 {
-    options.AddPolicy("AllowAll", policy =>
-        policy.AllowAnyOrigin()
-              .AllowAnyHeader()
-              .AllowAnyMethod());
+    options.AddPolicy("AllowAll",
+        policy => policy
+            .AllowAnyHeader()
+            .AllowAnyMethod()
+            .AllowCredentials()
+            .SetIsOriginAllowed(_ => true));
 });
-builder.Services.Configure<TelegramOptions>(
-    builder.Configuration.GetSection("Telegram"));
-
-// نضيف الـ Manager نفسه
+// 9️⃣ Telegram Manager
+builder.Services.Configure<TelegramOptions>(builder.Configuration.GetSection("Telegram"));
 builder.Services.AddSingleton<TelegramClientManager>(sp =>
 {
     var opts = sp.GetRequiredService<IOptions<TelegramOptions>>().Value;
     return new TelegramClientManager(opts.ApiId, opts.ApiHash, opts.BaseDataDir);
 });
+
+// 🔟 SignalR
+builder.Services.AddSignalR();
+
 var app = builder.Build();
 
-// 9️⃣ Middleware
 app.UseCors("AllowAll");
 app.UseHttpsRedirection();
 app.UseAuthorization();
 
-// 10️⃣ Map Controllers
+// 1️⃣2️⃣ Map Controllers + Hubs
 app.MapControllers();
+app.MapHub<ChatHub>("/chathub");
 
-// 11️⃣ Run
+// 1️⃣3️⃣ Run
 app.Run();

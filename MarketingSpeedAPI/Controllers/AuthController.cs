@@ -367,13 +367,20 @@ namespace MarketingSpeedAPI.Controllers
         }
 
         [HttpGet("getUserBy")]
-        public async Task<IActionResult> GetUserById(int id,string lang)
+        public async Task<IActionResult> GetUserById(int id, string lang)
         {
             var user = await (
                 from u in _context.Users
                 join c in _context.Cities
                     on u.city equals c.Id into cityGroup
                 from c in cityGroup.DefaultIfEmpty()   // 👈 Left Join
+
+                join acc in _context.user_accounts
+                    on u.id equals acc.UserId into accountGroup
+                from acc in accountGroup
+                    .Where(a => a.PlatformId == 1)     // 👈 فلترة على platformid = 1
+                    .DefaultIfEmpty()
+
                 where u.id == id
                 select new
                 {
@@ -390,8 +397,9 @@ namespace MarketingSpeedAPI.Controllers
                     u.description,
                     u.password_hash,
                     u.theme,
-                    cityName =lang == "ar"? c.NameAr :c.NameEn,   
-                    CityId = u.city
+                    cityName = lang == "ar" ? c.NameAr : c.NameEn,
+                    CityId = u.city,
+                    WasenderSessionId = acc.WasenderSessionId
                 }
             )
             .AsNoTracking()
@@ -401,6 +409,20 @@ namespace MarketingSpeedAPI.Controllers
                 return NotFound(new { message = "User not found" });
 
             return Ok(user);
+        }
+
+        [HttpGet("getSessionId")]
+        public async Task<IActionResult> GetSessionId(int userId, int platformId = 1)
+        {
+            var sessionId = await _context.user_accounts
+                .Where(ua => ua.UserId == userId && ua.PlatformId == platformId)
+                .Select(ua => ua.WasenderSessionId)
+                .FirstOrDefaultAsync();
+
+            if (sessionId==null)
+                return NotFound(new { message = "SessionId not found for this user/platform" });
+
+            return Ok(new { WasenderSessionId = sessionId });
         }
 
 

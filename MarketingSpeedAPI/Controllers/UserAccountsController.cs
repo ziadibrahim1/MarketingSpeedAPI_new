@@ -20,7 +20,6 @@ namespace MarketingSpeedAPI.Controllers
         {
             _context = context;
 
-            //  إعداد HttpClient مره واحده
             _baseUrl = wasenderOptions.Value.BaseUrl.TrimEnd('/');
             _client = new HttpClient
             {
@@ -33,7 +32,6 @@ namespace MarketingSpeedAPI.Controllers
         [HttpPost("create-session")]
         public async Task<IActionResult> CreateSession([FromBody] CreateSessionRequests req)
         {
-            // ✅ تحقق أولاً من أن المستخدم عنده باقة نشطة ومدفوعة
             var hasActiveSubscription = await _context.UserSubscriptions.AnyAsync(s =>
                 s.UserId == req.UserId &&
                 s.IsActive == true &&
@@ -51,11 +49,9 @@ namespace MarketingSpeedAPI.Controllers
                 });
             }
 
-            // ✅ تحقق هل فيه حساب موجود للمستخدم بنفس المنصة
             var existingAccount = await _context.user_accounts
                 .FirstOrDefaultAsync(a => a.UserId == req.UserId && a.PlatformId == req.PlatformId);
 
-            // ✅ نفس الرقم موجود + عنده سيشن شغال
             if (existingAccount != null && existingAccount.AccountIdentifier == req.PhoneNumber && existingAccount.WasenderSessionId != null)
             {
                 return Ok(new
@@ -63,6 +59,7 @@ namespace MarketingSpeedAPI.Controllers
                     success = true,
                     message = "Account already exists with same phone",
                     sessionId = existingAccount.WasenderSessionId
+
                 });
             }
 
@@ -75,6 +72,16 @@ namespace MarketingSpeedAPI.Controllers
                     log_messages = req.LogMessages,
                     account_protection =false,
                     read_incoming_messages = true,
+                    webhook_url = "https://comedically-dcollet-elida.ngrok-free.app/api/webhook",
+                    webhook_enabled = true,
+                    webhook_events = new[]
+    {
+        "messages.received",
+        "session.status",
+        "messages.update",
+        "message-receipt.update",
+    "message.sent"
+    }
                 });
 
                 var respNew = await _client.PostAsync("/api/whatsapp-sessions", bodyNewSession);
@@ -86,8 +93,8 @@ namespace MarketingSpeedAPI.Controllers
                 var newData = JsonDocument.Parse(createContentNew);
                 var newSessionId = newData.RootElement.GetProperty("data").GetProperty("id").GetInt32();
                 var newApiKey = newData.RootElement.GetProperty("data").GetProperty("api_key").GetString();
+                var newWebhookSecret = newData.RootElement.GetProperty("data").GetProperty("webhook_secret").GetString();
 
-                // تحديث الحساب الموجود
                 existingAccount.AccountIdentifier = req.PhoneNumber;
                 existingAccount.DisplayName = req.Name;
                 existingAccount.Status = "disconnected";
@@ -96,6 +103,8 @@ namespace MarketingSpeedAPI.Controllers
                 existingAccount.ConnectedAt = DateTime.UtcNow;
                 existingAccount.LastActivity = DateTime.UtcNow;
                 existingAccount.QrCodeExpiry = DateTime.UtcNow.AddSeconds(45);
+                existingAccount.WebhookSecret = newWebhookSecret;
+
 
                 await _context.SaveChangesAsync();
 
@@ -107,7 +116,6 @@ namespace MarketingSpeedAPI.Controllers
                 });
             }
 
-            // 📌 لو الحساب موجود لكن برقم مختلف → تحديث
             if (existingAccount != null && existingAccount.AccountIdentifier != req.PhoneNumber)
             {
                 var updateBody = new
@@ -117,6 +125,16 @@ namespace MarketingSpeedAPI.Controllers
                     account_protection = false,
                     log_messages = req.LogMessages,
                     read_incoming_messages = true,
+                    webhook_url = "https://comedically-dcollet-elida.ngrok-free.app/api/webhook",
+                    webhook_enabled = true,
+                    webhook_events = new[]
+    {
+        "messages.received",
+        "session.status",
+        "messages.update",
+        "message-receipt.update",
+    "message.sent"
+    }
                 };
 
                 var putResp = await _client.PutAsJsonAsync(
@@ -130,6 +148,7 @@ namespace MarketingSpeedAPI.Controllers
                     var putData = JsonDocument.Parse(putContent);
 
                     var newApiKey = putData.RootElement.GetProperty("data").GetProperty("api_key").GetString();
+                    var newWebhookSecret = putData.RootElement.GetProperty("data").GetProperty("webhook_secret").GetString();
 
                     existingAccount.AccountIdentifier = req.PhoneNumber;
                     existingAccount.DisplayName = req.Name;
@@ -137,7 +156,7 @@ namespace MarketingSpeedAPI.Controllers
                     existingAccount.Status = "disconnected";
                     existingAccount.LastActivity = DateTime.UtcNow;
                     existingAccount.QrCodeExpiry = DateTime.UtcNow.AddSeconds(45);
-
+                    existingAccount.WebhookSecret = newWebhookSecret;
                     await _context.SaveChangesAsync();
 
                     return Ok(new
@@ -149,13 +168,11 @@ namespace MarketingSpeedAPI.Controllers
                 }
                 else
                 {
-                    // ❌ فشل التحديث → نحذف القديم ونعمل واحد جديد
                     _context.user_accounts.Remove(existingAccount);
                     await _context.SaveChangesAsync();
                 }
             }
 
-            // 🆕 مفيش حساب أصلاً → اعمل سيشن جديد
             var body = JsonContent.Create(new
             {
                 name = req.Name,
@@ -163,6 +180,16 @@ namespace MarketingSpeedAPI.Controllers
                 log_messages = req.LogMessages,
                 account_protection = false,
                 read_incoming_messages = true,
+                webhook_url = "https://comedically-dcollet-elida.ngrok-free.app/api/webhook",
+                webhook_enabled = true,
+                webhook_events = new[]
+{
+    "messages.received",
+    "session.status",
+    "messages.update",
+    "message-receipt.update",
+    "message.sent"
+}
             });
 
             var resp = await _client.PostAsync("/api/whatsapp-sessions", body);
@@ -174,6 +201,7 @@ namespace MarketingSpeedAPI.Controllers
             var data = JsonDocument.Parse(createContent);
             var sessionId = data.RootElement.GetProperty("data").GetProperty("id").GetInt32();
             var apiToken = data.RootElement.GetProperty("data").GetProperty("api_key").GetString();
+            var webhookSecret = data.RootElement.GetProperty("data").GetProperty("webhook_secret").GetString();
 
             var account = new UserAccount
             {
@@ -186,7 +214,8 @@ namespace MarketingSpeedAPI.Controllers
                 WasenderSessionId = sessionId,
                 ConnectedAt = DateTime.UtcNow,
                 LastActivity = DateTime.UtcNow,
-                QrCodeExpiry = DateTime.UtcNow.AddSeconds(45)
+                QrCodeExpiry = DateTime.UtcNow.AddSeconds(45),
+                WebhookSecret = webhookSecret
             };
 
             _context.user_accounts.Add(account);
@@ -210,7 +239,6 @@ namespace MarketingSpeedAPI.Controllers
             if (account == null || account.WasenderSessionId == null)
                 return NotFound(new { success = false, message = "No session found for this user" });
 
-            //  Connect session
             var connectResp = await _client.PostAsync(
                 $"/api/whatsapp-sessions/{account.WasenderSessionId}/connect",
                 null
@@ -220,7 +248,6 @@ namespace MarketingSpeedAPI.Controllers
             if (!connectResp.IsSuccessStatusCode)
                 return StatusCode((int)connectResp.StatusCode, new { success = false, error = connectContent });
 
-            //  Get QR Code
             var qrResp = await _client.GetAsync($"/api/whatsapp-sessions/{account.WasenderSessionId}/qrcode");
             var qrContent = await qrResp.Content.ReadAsStringAsync();
 
@@ -241,7 +268,6 @@ namespace MarketingSpeedAPI.Controllers
         [HttpGet("check-status/{userId:int}/{platformId:int}")]
         public async Task<IActionResult> CheckStatus(int userId, int platformId)
         {
-            // ✅ تحقق أولاً من أن الاشتراك نشط وغير منتهي
             var today = DateTime.UtcNow.Date;
 
             var subscription = await _context.UserSubscriptions
@@ -262,14 +288,12 @@ namespace MarketingSpeedAPI.Controllers
                 });
             }
 
-            // ✅ تحقق من الحساب
             var account = await _context.user_accounts
                 .FirstOrDefaultAsync(a => a.UserId == userId && a.PlatformId == platformId);
 
             if (account == null || account.WasenderSessionId == null)
                 return NotFound(new { success = false, message = "No session found" });
 
-            // ✅ استدعاء API الخاص بـ Wasender
             var resp = await _client.GetAsync($"/api/whatsapp-sessions/{account.WasenderSessionId}");
             var content = await resp.Content.ReadAsStringAsync();
 
@@ -279,7 +303,6 @@ namespace MarketingSpeedAPI.Controllers
             var data = JsonDocument.Parse(content);
             var status = data.RootElement.GetProperty("data").GetProperty("status").GetString();
 
-            // ✅ تحديث الحالة في قاعدة البيانات
             account.Status = status;
             account.LastActivity = DateTime.UtcNow;
             if (status == "connected")

@@ -91,6 +91,7 @@ namespace MarketingSpeedAPI.Models
 
         [Column("UserId")]
         public int UserId { get; set; }
+  
 
         [Column("PackageId")]
         public int PackageId { get; set; }

@@ -16,6 +16,7 @@
         public DateTime? LastActivity { get; set; }
         public DateTime CreatedAt { get; set; }
         public DateTime UpdatedAt { get; set; }
+        public string? WebhookSecret { get; set; }
 
         public int? WasenderSessionId { get; set; }
     }

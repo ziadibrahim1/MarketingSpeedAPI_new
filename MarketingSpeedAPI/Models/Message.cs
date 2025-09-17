@@ -34,7 +34,9 @@
         public int PlatformId { get; set; }
         public string Status { get; set; } = "pending"; // pending | sent | failed
         public string? ErrorMessage { get; set; }
+        public bool toGroupMember { get; set; } = false;
         public DateTime AttemptedAt { get; set; } = DateTime.UtcNow;
+
 
         // ✅ إضافات مهمة
         public string? ExternalMessageId { get; set; } // id اللي بيرجع من API
@@ -97,6 +99,12 @@
         public string Type { get; set; } = ""; // "image" | "video" | "document"
         public string Url { get; set; } = "";  // أو Base64 لو عايز
         public string FileName { get; set; } = ""; // للمستندات
+    }
+
+    public class CreateGroupRequest
+    {
+        public string Name { get; set; } = "";
+        public List<string> SourceGroupIds { get; set; } = new List<string>();
     }
 
 }
