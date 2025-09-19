@@ -6,7 +6,6 @@ using Microsoft.Extensions.Options;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using RestSharp;
-
 namespace MarketingSpeedAPI.Controllers
 {
 
@@ -260,6 +259,95 @@ namespace MarketingSpeedAPI.Controllers
                 groupsCount
             });
         }
+
+
+        [HttpGet("user/{userId}/messages-stats")]
+        public async Task<IActionResult> GetUserMessagesStats(long userId, string range = "day")
+        {
+            var now = DateTime.UtcNow.Date;
+
+            var logs = await (from m in _context.Messages
+                              join l in _context.message_logs on m.Id equals l.MessageId
+                              where m.UserId == userId && l.Status == "sent"
+                              select l.AttemptedAt)
+                             .ToListAsync();
+
+            if (range == "day")
+            {
+                
+                var last7Days = Enumerable.Range(0, 7).Select(i => now.AddDays(-6 + i)).ToList();
+
+                var grouped = logs
+                    .Where(d => d >= last7Days.First())
+                    .GroupBy(d => d.Date)
+                    .ToDictionary(g => g.Key, g => g.Count());
+
+                var result = last7Days
+                    .Select(d => new {
+                        Period = d.ToString("yyyy-MM-dd"),  
+                        Count = grouped.ContainsKey(d) ? grouped[d] : 0
+                    })
+                    .ToList();
+                return Ok(result);
+            }
+            else if (range == "week")
+            {
+                var calendar = System.Globalization.CultureInfo.InvariantCulture.Calendar;
+                var weekRule = System.Globalization.CalendarWeekRule.FirstFourDayWeek;
+                var dayOfWeek = DayOfWeek.Saturday;
+
+                var now1 = DateTime.UtcNow.Date;
+
+                var startOfMonth = new DateTime(now1.Year, now1.Month, 1);
+
+                var grouped = logs
+                    .Where(d => d.Date >= startOfMonth && d.Date <= now1)
+                    .GroupBy(d => calendar.GetWeekOfYear(d, weekRule, dayOfWeek))
+                    .ToDictionary(g => g.Key, g => g.Count());
+
+                var result = new List<object>();
+
+                var currentWeek = calendar.GetWeekOfYear(now1, weekRule, dayOfWeek);
+
+                var firstWeekOfMonth = calendar.GetWeekOfYear(startOfMonth, weekRule, dayOfWeek);
+
+                var totalWeeksInMonth = currentWeek - firstWeekOfMonth + 1;
+
+                for (int i = 0; i < totalWeeksInMonth; i++)
+                {
+                    var weekNumber = firstWeekOfMonth + i;
+                    var periodLabel = $"الأسبوع {i + 1}";
+                    var count = grouped.ContainsKey(weekNumber) ? grouped[weekNumber] : 0;
+
+                    result.Add(new
+                    {
+                        Period = periodLabel,
+                        Count = count
+                    });
+                }
+
+                return Ok(result);
+            }
+            else // month
+            {
+                var months = Enumerable.Range(1, 12).ToList(); // 01..12
+                var grouped = logs
+                    .Where(d => d.Year == now.Year)
+                    .GroupBy(d => d.Month)
+                    .ToDictionary(g => g.Key, g => g.Count());
+
+                var result = months
+                    .Select(m => new {
+                        Period = m.ToString("00"), // 01..12
+                        Count = grouped.ContainsKey(m) ? grouped[m] : 0
+                    })
+                    .ToList();
+
+                return Ok(result);
+            }
+        }
+
+
 
     }
 }

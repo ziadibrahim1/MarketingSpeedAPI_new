@@ -27,13 +27,14 @@ namespace MarketingSpeedAPI.Controllers
             _client = new RestClient(wasenderOptions.Value.BaseUrl.TrimEnd('/'));
         }
 
-         
+
 
         [HttpPost("send-to-groups/{userId}")]
         public async Task<IActionResult> SendToGroups(ulong userId, [FromBody] SendGroupsRequest req)
         {
             var today = DateTime.UtcNow.Date;
 
+            // التحقق من الاشتراك
             var subscription = await _context.UserSubscriptions
                 .Where(s => s.UserId == (int)userId &&
                             s.IsActive &&
@@ -46,6 +47,7 @@ namespace MarketingSpeedAPI.Controllers
             if (subscription == null)
                 return Ok(new { success = false, status = "0", message = "Subscription invalid" });
 
+            // التحقق من حساب الواتساب
             var account = await _context.user_accounts
                 .FirstOrDefaultAsync(a => a.UserId == (int)userId && a.PlatformId == 1 && a.Status == "connected");
 
@@ -62,6 +64,7 @@ namespace MarketingSpeedAPI.Controllers
                 return $"{text}{dots}";
             }
 
+            // الرسالة الجديدة
             var newMessage = new Message
             {
                 PlatformId = account.PlatformId,
@@ -75,9 +78,6 @@ namespace MarketingSpeedAPI.Controllers
                 Status = "pending",
                 CreatedAt = DateTime.UtcNow
             };
-
-            _context.Messages.Add(newMessage);
-            await _context.SaveChangesAsync();
 
             string GetMessageTypeFromExtension(string fileUrl)
             {
@@ -112,8 +112,26 @@ namespace MarketingSpeedAPI.Controllers
                 return await _client.ExecuteAsync(request);
             }
 
+            
+
             async Task SendAndLogAsync(string groupId, Dictionary<string, object?> body, string? fileUrl = null)
             {
+                // تحقق من الرسائل المكررة خلال 15 دقيقة
+                var fifteenMinutesAgo = DateTime.UtcNow.AddMinutes(-15);
+                var existingMessage = await _context.Messages
+                    .Where(m => m.UserId == (long)userId &&
+                                m.Body == req.Message &&
+                                m.CreatedAt >= fifteenMinutesAgo)
+                    .FirstOrDefaultAsync();
+
+                Message messageToUse = existingMessage ?? newMessage;
+
+                if (existingMessage == null)
+                {
+                    _context.Messages.Add(newMessage);
+                    await _context.SaveChangesAsync();
+                }
+
                 var request = new RestRequest("/api/send-message", Method.Post);
                 request.AddHeader("Authorization", $"Bearer {account.AccessToken}");
                 request.AddHeader("Content-Type", "application/json");
@@ -132,32 +150,70 @@ namespace MarketingSpeedAPI.Controllers
                     catch { }
                 }
 
+                // انتظار 3 ثواني للتحقق من حالة الرسالة
+              
+
+                 
+                string status = "unknown";
+                if (!string.IsNullOrEmpty(externalId))
+                {
+                    var infoRequest = new RestRequest($"/api/messages/{externalId}/info", Method.Get);
+                    infoRequest.AddHeader("Authorization", $"Bearer {account.AccessToken}");
+                    var infoResponse = await _client.ExecuteAsync(infoRequest);
+                    if (infoResponse.IsSuccessful && !string.IsNullOrEmpty(infoResponse.Content))
+                    {
+                        try
+                        {
+                            var infoJson = JObject.Parse(infoResponse.Content);
+                            status = infoJson["status"]?.ToString() ?? "unknown";
+                        }
+                        catch { }
+                    }
+                }
+
+                // تسجيل log الرسالة
                 var log = new MessageLog
                 {
-                    MessageId = newMessage.Id,
+                    MessageId = messageToUse.Id,
                     Recipient = groupId,
                     PlatformId = account.PlatformId,
-                    Status = response.IsSuccessful ? "sent" : "failed",
-                    ErrorMessage = response.IsSuccessful ? null : response.Content,
+                    Status = (status == "1" || status == "2") ? "sent" : "sent",
+                    ErrorMessage = (status == "1" || status == "2") ? "Blocked or failed" : null,
                     AttemptedAt = DateTime.UtcNow,
                     ExternalMessageId = externalId
                 };
                 _context.message_logs.Add(log);
 
-                if (response.IsSuccessful)
+                // تسجيل المجموعة كمحظورة إذا كانت الحالة 1 أو 2
+                if (status == "1" || status == "2")
                 {
-                    newMessage.Status = "sent";
-                    newMessage.SentAt = DateTime.UtcNow;
-                    results.Add(new { groupId, fileUrl, success = true, externalId });
-                }
-                else
-                {
-                    results.Add(new { groupId, fileUrl, success = false, error = response.Content });
+                    var alreadyBlocked = await _context.BlockedGroups
+                        .AnyAsync(bg => bg.GroupId == groupId && bg.UserId == (int)userId);
+                    if (!alreadyBlocked)
+                    {
+                        _context.BlockedGroups.Add(new BlockedGroup
+                        {
+                            GroupId = groupId,
+                            UserId = (int)userId
+                        });
+                    }
                 }
 
                 await _context.SaveChangesAsync();
+
+                // إضافة نتيجة لإرجاعها للفلاتر
+                results.Add(new
+                {
+                    groupId,
+                    fileUrl,
+                    success = status != "1" && status != "2",
+                    blocked = status == "1" || status == "2",
+                    messageId = messageToUse.Id,
+                    externalId
+                });
             }
 
+            // تنفيذ الإرسال لكل مجموعة
             foreach (var groupId in req.GroupIds)
             {
                 if (req.ImageUrls != null && req.ImageUrls.Count > 0)
@@ -166,13 +222,11 @@ namespace MarketingSpeedAPI.Controllers
                     {
                         bool isLast = i == req.ImageUrls.Count - 1;
                         var msgTypeStr = GetMessageTypeFromExtension(req.ImageUrls[i]);
-
                         var body = new Dictionary<string, object?>
                 {
                     { "to", groupId },
                     { msgTypeStr, req.ImageUrls[i] }
                 };
-
                         if (isLast && !string.IsNullOrWhiteSpace(req.Message))
                             body.Add("text", AddRandomDots(req.Message));
 

@@ -43,6 +43,8 @@ namespace MarketingSpeedAPI.Data
         public DbSet<OurGroupsCategory> countries { get; set; }
         public DbSet<CompanyGroup> company_groups { get; set; }
         public DbSet<BlockedChat> blocked_chats { get; set; }
+
+        public DbSet<BlockedGroup> BlockedGroups { get; set; }
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             base.OnModelCreating(modelBuilder);

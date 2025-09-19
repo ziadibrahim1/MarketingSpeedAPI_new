@@ -114,7 +114,9 @@ namespace MarketingSpeedAPI.Controllers
                     Text = ExtractMessageText(message),
                     IsSentByMe = key.GetProperty("fromMe").GetBoolean(),
                     Timestamp = DateTime.UtcNow,
+                    IsRaeded = false,
                     SessionId = matchedAccount.WasenderSessionId ?? 0
+
                 };
 
                 _db.ChatMessages.Add(msg);
@@ -166,6 +168,7 @@ namespace MarketingSpeedAPI.Controllers
                 return BadRequest(new { error = "UserPhone and Text are required" });
 
             message.IsSentByMe = true;
+            message.IsRaeded = false;
             message.Timestamp = DateTime.UtcNow;
 
             _db.ChatMessages.Add(message);

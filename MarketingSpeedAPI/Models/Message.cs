@@ -51,6 +51,14 @@
         public List<string>? ImageUrls { get; set; }
     }
 
+    public class BlockedGroup
+    {
+        public int Id { get; set; }
+        public string GroupId { get; set; } = "";
+        public int UserId { get; set; }
+        public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    }
+
     public class SendMessageRequests
     {
         public int PlatformId { get; set; }
