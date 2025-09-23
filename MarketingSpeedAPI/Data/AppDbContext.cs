@@ -31,6 +31,7 @@ namespace MarketingSpeedAPI.Data
         public DbSet<PackageLog> PackageLogs { get; set; }
         public DbSet<PackageCategory> PackageCategories { get; set; }
         public DbSet<UserSubscription> UserSubscriptions { get; set; }
+        public DbSet<LeftGroup> LeftGroups { get; set; }
         public DbSet<SubscriptionUsage> subscription_usage { get; set; }
         public DbSet<UserAccount> user_accounts { get; set; }
         public DbSet<Message> Messages { get; set; } = null!;
@@ -43,7 +44,7 @@ namespace MarketingSpeedAPI.Data
         public DbSet<OurGroupsCategory> countries { get; set; }
         public DbSet<CompanyGroup> company_groups { get; set; }
         public DbSet<BlockedChat> blocked_chats { get; set; }
-
+        public DbSet<UserJoinedGroup> user_joined_groups { get; set; }
         public DbSet<BlockedGroup> BlockedGroups { get; set; }
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -117,6 +118,17 @@ namespace MarketingSpeedAPI.Data
                 .HasOne(cg => cg.OurGroupsCategory)
                 .WithMany(c => c.CompanyGroups)
                 .HasForeignKey(cg => cg.CategoryId);
+
+            modelBuilder.Entity<UserJoinedGroup>(entity =>
+            {
+                entity.ToTable("user_joined_groups");
+                entity.HasKey(e => e.Id);
+                entity.Property(e => e.user_id).IsRequired();
+                entity.Property(e => e.group_invite_code).IsRequired().HasMaxLength(255);
+                entity.Property(e => e.group_name).HasMaxLength(255);
+                entity.Property(e => e.joined_at).IsRequired();
+                entity.Property(e => e.is_active).IsRequired().HasDefaultValue(true);
+            });
         }
 
     }

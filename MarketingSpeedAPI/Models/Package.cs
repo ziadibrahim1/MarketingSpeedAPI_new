@@ -96,6 +96,9 @@ namespace MarketingSpeedAPI.Models
         [Column("PackageId")]
         public int PackageId { get; set; }
 
+        [Column("Add_groups_limit")]
+        public int? Add_groups_limit { get; set; }
+
         [Column("PlanName")]
         public string PlanName { get; set; } = string.Empty;
 

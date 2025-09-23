@@ -20,6 +20,9 @@
 
         public List<City> Cities { get; set; } = new List<City>();
     }
+    public class InviteRequest
+    {
+        public string? Code { get; set; }
+    }
 
-   
 }

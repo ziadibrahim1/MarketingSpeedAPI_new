@@ -60,11 +60,18 @@ builder.Services.AddSingleton<TelegramClientManager>(sp =>
 
 // 🔟 SignalR
 builder.Services.AddSignalR();
-
+builder.WebHost.ConfigureKestrel(options =>
+{
+    options.ListenAnyIP(5114); // HTTP
+    options.ListenAnyIP(7062, listenOptions =>
+    {
+        listenOptions.UseHttps();
+    });
+});
 var app = builder.Build();
 
 app.UseCors("AllowAll");
-app.UseHttpsRedirection();
+//app.UseHttpsRedirection();
 app.UseAuthorization();
 
 // 1️⃣2️⃣ Map Controllers + Hubs

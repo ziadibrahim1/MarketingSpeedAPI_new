@@ -116,7 +116,6 @@ namespace MarketingSpeedAPI.Controllers
 
             async Task SendAndLogAsync(string groupId, Dictionary<string, object?> body, string? fileUrl = null)
             {
-                // تحقق من الرسائل المكررة خلال 15 دقيقة
                 var fifteenMinutesAgo = DateTime.UtcNow.AddMinutes(-15);
                 var existingMessage = await _context.Messages
                     .Where(m => m.UserId == (long)userId &&
@@ -150,10 +149,6 @@ namespace MarketingSpeedAPI.Controllers
                     catch { }
                 }
 
-                // انتظار 3 ثواني للتحقق من حالة الرسالة
-              
-
-                 
                 string status = "unknown";
                 if (!string.IsNullOrEmpty(externalId))
                 {
@@ -251,7 +246,7 @@ namespace MarketingSpeedAPI.Controllers
             }
 
             if (newMessage.Status == "pending")
-                newMessage.Status = "failed";
+                newMessage.Status = "sent";
 
             await _context.SaveChangesAsync();
 
@@ -523,6 +518,11 @@ namespace MarketingSpeedAPI.Controllers
             if (account == null || account.WasenderSessionId == null)
                 return NotFound();
 
+            var leftJids = await _context.LeftGroups
+                .Where(lg => lg.UserId == (int)userId)
+                .Select(lg => lg.GroupId)
+                .ToListAsync();
+
             var groupsRequest = new RestRequest("/api/groups", Method.Get);
             groupsRequest.AddHeader("Authorization", $"Bearer {account.AccessToken}");
             var groupsResp = await _client.ExecuteAsync(groupsRequest);
@@ -536,6 +536,7 @@ namespace MarketingSpeedAPI.Controllers
             if (groupsJson.RootElement.TryGetProperty("data", out var groups))
             {
                 result = groups.EnumerateArray()
+                    .Where(g => !leftJids.Contains(g.GetProperty("id").GetString()))  
                     .Select(g => new
                     {
                         id = g.GetProperty("id").GetString(),
@@ -546,6 +547,7 @@ namespace MarketingSpeedAPI.Controllers
 
             return Ok(result);
         }
+
 
         [HttpGet("groups/{userId}/{platformId}/{groupId}/membersCount")]
         public async Task<IActionResult> GetGroupMembersCount(ulong userId, int platformId, string groupId)
@@ -872,7 +874,7 @@ namespace MarketingSpeedAPI.Controllers
 
             string GetRandomDotSuffix()
             {
-                var options = new[] { "", ".", "..", "..." };
+                var options = new[] { "", ".", "..", ". ." };
                 return options[Random.Shared.Next(options.Length)];
             }
 
@@ -1139,6 +1141,7 @@ namespace MarketingSpeedAPI.Controllers
 
             var participants = new HashSet<string>();
 
+            // جمع المشاركين من المجموعات المصدر
             foreach (var groupJid in req.SourceGroupIds)
             {
                 var metadataRequest = new RestRequest($"/api/groups/{groupJid}/metadata", Method.Get);
@@ -1160,13 +1163,13 @@ namespace MarketingSpeedAPI.Controllers
                         {
                             var jid = p.GetProperty("jid").GetString();
                             if (!string.IsNullOrEmpty(jid))
-                            {
-                                participants.Add(jid);  
-                            }
+                                participants.Add(jid);
                         }
                     }
                 }
             }
+
+            // إنشاء الجروب الجديد عبر API
             var createRequest = new RestRequest("/api/groups", Method.Post);
             createRequest.AddHeader("Authorization", $"Bearer {account.AccessToken}");
             createRequest.AddHeader("Content-Type", "application/json");
@@ -1174,7 +1177,7 @@ namespace MarketingSpeedAPI.Controllers
             var body = new
             {
                 name = req.Name,
-                participants = participants.ToArray()
+                participants = new string[] { } // نبدأ بدون إضافة جميع المشاركين دفعة واحدة
             };
             createRequest.AddJsonBody(body);
 
@@ -1182,7 +1185,62 @@ namespace MarketingSpeedAPI.Controllers
             if (!createResponse.IsSuccessful)
                 return Ok(new { success = false, message = "Failed to create new group", error = createResponse.Content });
 
-            return Ok(new { success = true, message = "Group created successfully", data = createResponse.Content });
+            var jsonResponse = JsonDocument.Parse(createResponse.Content);
+            string groupName = req.Name;
+            string inviteLink = jsonResponse.RootElement.GetProperty("inviteLink").GetString() ?? "";
+            string description = jsonResponse.RootElement.GetProperty("description").GetString() ?? "";
+            int? countryId = 16;
+            int? categoryId = 0;
+
+            // تسجيل الجروب في قاعدة البيانات
+            var companyGroup = new CompanyGroup
+            {
+                PlatformId = 1,
+                GroupName = groupName,
+                Description = description,
+                InviteLink = inviteLink,
+                CountryId = countryId,
+                CategoryId = categoryId,
+                IsActive = true,
+                IsHidden = false,
+                SendingStatus = "pending",
+                CreatedAt = DateTime.UtcNow
+            };
+
+            _context.company_groups.Add(companyGroup);
+            await _context.SaveChangesAsync();
+
+            // إضافة المشاركين على دفعات 50 كل 5 ثواني
+            int batchSize = 50;
+            int delayMilliseconds = 5000;
+            var allParticipants = participants.ToList();
+
+            for (int i = 0; i < allParticipants.Count; i += batchSize)
+            {
+                var batch = allParticipants.Skip(i).Take(batchSize).ToArray();
+
+                var addRequest = new RestRequest($"/api/groups/{inviteLink}/participants/add", Method.Post);
+                addRequest.AddHeader("Authorization", $"Bearer {account.AccessToken}");
+                addRequest.AddHeader("Content-Type", "application/json");
+
+                addRequest.AddJsonBody(new { participants = batch });
+
+                var addResponse = await _client.ExecuteAsync(addRequest);
+                if (!addResponse.IsSuccessful)
+                {
+                    Console.WriteLine($"Failed to add batch starting at index {i}: {addResponse.Content}");
+                }
+
+                if (i + batchSize < allParticipants.Count)
+                    await Task.Delay(delayMilliseconds);
+            }
+
+            return Ok(new
+            {
+                success = true,
+                message = "Group created and participants added successfully",
+                data = createResponse.Content
+            });
         }
 
     }
