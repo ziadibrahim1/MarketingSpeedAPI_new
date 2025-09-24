@@ -37,6 +37,7 @@ namespace MarketingSpeedAPI.Controllers
                 return builder.ToString();
             }
         }
+
         [HttpPost("login")]
         public async Task<IActionResult> Login([FromBody] LoginDto dto)
         {
@@ -92,7 +93,6 @@ namespace MarketingSpeedAPI.Controllers
             });
 
         }
-
 
         [HttpPost("register")]
         public async Task<IActionResult> Register([FromBody] RegisterDto dto)
@@ -161,14 +161,13 @@ namespace MarketingSpeedAPI.Controllers
             if (user == null)
                 return NotFound(new { message = "User not found" });
 
-            // ✅ نحدث بس الحقول اللي جت من الـ DTO
+            // تحديث البيانات الشخصية
             if (!string.IsNullOrEmpty(dto.First_Name)) user.first_name = dto.First_Name;
             if (!string.IsNullOrEmpty(dto.Middle_Name)) user.middle_name = dto.Middle_Name;
             if (!string.IsNullOrEmpty(dto.Last_Name)) user.last_name = dto.Last_Name;
             if (!string.IsNullOrEmpty(dto.Country_Code)) user.country_code = dto.Country_Code;
+             user.country = dto.CountryId.ToString();
             if (!string.IsNullOrEmpty(dto.Phone)) user.phone = dto.Phone;
-            if (!string.IsNullOrEmpty(dto.Country)) user.country = dto.Country;
-            if (dto.City.HasValue) user.city = dto.City;
             if (!string.IsNullOrEmpty(dto.User_Type)) user.user_type = dto.User_Type;
             if (!string.IsNullOrEmpty(dto.Company_Name)) user.company_name = dto.Company_Name;
             if (!string.IsNullOrEmpty(dto.Description)) user.description = dto.Description;
@@ -179,12 +178,48 @@ namespace MarketingSpeedAPI.Controllers
             if (!string.IsNullOrEmpty(dto.Theme)) user.theme = dto.Theme;
             if (dto.last_seen.HasValue) user.last_seen = dto.last_seen;
 
+            // تحديث المدينة وربطها بالدولة
+            if (!string.IsNullOrEmpty(dto.CityName) && dto.CountryId.HasValue)
+            {
+                // التأكد من وجود الدولة
+                var country = await _context.Countries
+                    .Include(c => c.Cities)
+                    .FirstOrDefaultAsync(c => c.Id == dto.CountryId.Value && c.IsActive);
+
+                if (country == null)
+                    return BadRequest(new { message = "Country not found" });
+
+                // البحث عن المدينة داخل الدولة
+                var city = country.Cities.FirstOrDefault(c =>
+                    c.IsActive &&
+                    (c.NameAr == dto.CityName || c.NameEn == dto.CityName)
+                );
+
+                if (city == null)
+                {
+                    // إنشاء المدينة الجديدة
+                    city = new City
+                    {
+                        NameAr = dto.CityName,  // هنا ممكن تحددي اللغة حسب الحاجة
+                        NameEn = dto.CityName,
+                        CountryId = country.Id,
+                        IsActive = true
+                    };
+                    _context.Cities.Add(city);
+                    await _context.SaveChangesAsync();
+                }
+
+                // ربط المستخدم بالمدينة الجديدة أو الموجودة
+                user.city = city.Id;
+            }
+
             user.updated_at = DateTime.UtcNow;
 
             await _context.SaveChangesAsync();
 
             return Ok(new { message = "Profile updated successfully", user });
         }
+
         [HttpPost("verify-email")]
         public async Task<IActionResult> VerifyEmail([FromBody] VerifyCodeDto dto)
         {
@@ -231,6 +266,9 @@ namespace MarketingSpeedAPI.Controllers
         {
             lang = lang.ToLower();
 
+            // ترتيب مخصص
+            var gulfCountries = new List<string> { "السعودية", "الإمارات", "الكويت", "قطر", "عمان", "البحرين", "اليمن" };
+
             var countries = await _context.Countries
                 .Where(c => c.IsActive)
                 .Select(c => new
@@ -238,12 +276,28 @@ namespace MarketingSpeedAPI.Controllers
                     Id = c.Id,
                     Name = lang == "ar" ? c.NameAr : c.NameEn,
                     c.IsoCode,
-                    c.PhoneCode
+                    c.PhoneCode,
+                    NameAr = c.NameAr // لحساب الترتيب
                 })
                 .ToListAsync();
 
-            return Ok(countries);
+            // ترتيب القائمة في الذاكرة
+            var orderedCountries = countries
+                .OrderBy(c => c.NameAr == "السعودية" ? 0 :
+                              gulfCountries.Contains(c.NameAr) ? 1 : 2) // السعودية أولًا، دول الخليج ثانيًا، باقي الدول ثالثًا
+                .ThenBy(c => c.NameAr) // ترتيب أبجدي داخل كل مجموعة
+                .Select(c => new
+                {
+                    c.Id,
+                    c.Name,
+                    c.IsoCode,
+                    c.PhoneCode
+                })
+                .ToList();
+
+            return Ok(orderedCountries);
         }
+
 
         [HttpGet("GetCities")]
         public async Task<IActionResult> GetCities(int countryId, string lang = "ar")

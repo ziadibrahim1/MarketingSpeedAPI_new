@@ -4,6 +4,7 @@ using MarketingSpeedAPI.Hubs;
 using MarketingSpeedAPI.Models;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using System.Security.Cryptography.X509Certificates;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -50,6 +51,7 @@ builder.Services.AddCors(options =>
             .AllowCredentials()
             .SetIsOriginAllowed(_ => true));
 });
+
 // 9️⃣ Telegram Manager
 builder.Services.Configure<TelegramOptions>(builder.Configuration.GetSection("Telegram"));
 builder.Services.AddSingleton<TelegramClientManager>(sp =>
@@ -60,18 +62,37 @@ builder.Services.AddSingleton<TelegramClientManager>(sp =>
 
 // 🔟 SignalR
 builder.Services.AddSignalR();
-builder.WebHost.ConfigureKestrel(options =>
+
+// ✅ جلب الشهادة من Windows Certificate Store
+var store = new X509Store(StoreName.My, StoreLocation.LocalMachine);
+store.Open(OpenFlags.ReadOnly);
+var certs = store.Certificates.Find(
+    X509FindType.FindByThumbprint,
+    "5ce000fd74f2c3a0242bdec24ffec213a44a2edc", // ضع هنا Thumbprint الشهادة
+    validOnly: false
+);
+
+if (certs.Count == 0)
 {
-    options.ListenAnyIP(5114); // HTTP
-    options.ListenAnyIP(7062, listenOptions =>
+    throw new Exception("Certificate not found in LocalMachine\\My store!");
+}
+
+var certificate = certs[0];
+store.Close();
+
+// 🔹 تشغيل Kestrel مع HTTP و HTTPS
+builder.WebHost.UseKestrel(options =>
+{
+    options.ListenAnyIP(80); // HTTP
+    options.ListenAnyIP(443, listenOptions =>
     {
-        listenOptions.UseHttps();
+        listenOptions.UseHttps(certificate);
     });
 });
+
 var app = builder.Build();
 
 app.UseCors("AllowAll");
-//app.UseHttpsRedirection();
 app.UseAuthorization();
 
 // 1️⃣2️⃣ Map Controllers + Hubs

@@ -3,10 +3,7 @@ using MarketingSpeedAPI.Hubs;
 using MarketingSpeedAPI.Models;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.SignalR;
-using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 
 namespace MarketingSpeedAPI.Controllers
 {
@@ -33,27 +30,25 @@ namespace MarketingSpeedAPI.Controllers
             }
 
             var headerSig = Request.Headers["x-webhook-signature"].FirstOrDefault();
-            if (string.IsNullOrEmpty(headerSig))
-                return Unauthorized(new { error = "Missing signature" });
 
+            // 🟢 لو الطلب ما فيهوش توقيع (زي اختبار Wasender) رجع OK
+            if (string.IsNullOrEmpty(headerSig))
+            {
+                return Ok(new { status = "webhook endpoint alive" });
+            }
+
+            // 🟢 تأكيد التوقيع
             var accounts = _db.user_accounts
                 .Where(a => a.WebhookSecret != null)
                 .ToList();
 
-            UserAccount? matchedAccount = null;
-
-            foreach (var account in accounts)
-            {
-                if (headerSig == account.WebhookSecret)
-                {
-                    matchedAccount = account;
-                    break;
-                }
-            }
+            UserAccount? matchedAccount = accounts
+                .FirstOrDefault(a => a.WebhookSecret == headerSig);
 
             if (matchedAccount == null)
                 return Unauthorized(new { error = "Invalid signature" });
 
+            // 🟢 قراءة الـ JSON
             var doc = JsonDocument.Parse(body);
             var root = doc.RootElement;
 
@@ -62,7 +57,7 @@ namespace MarketingSpeedAPI.Controllers
 
             var eventType = eventElement.GetString();
 
-            if (eventType == "messages.received" || eventType == "messages.upsert" || eventType == "message.sent")
+            if (eventType == "messages-personal.received")
             {
                 if (!root.TryGetProperty("data", out var data))
                     return Ok(new { ignored = "no data" });
@@ -82,7 +77,7 @@ namespace MarketingSpeedAPI.Controllers
                         if (!messagesElement.TryGetProperty("key", out key))
                             return Ok(new { ignored = "no key in messages" });
 
-                        messagesElement.TryGetProperty("message", out message); 
+                        messagesElement.TryGetProperty("message", out message);
                         remoteJid = key.GetProperty("remoteJid").GetString();
                     }
                     else if (messagesElement.ValueKind == JsonValueKind.Array)
@@ -104,6 +99,7 @@ namespace MarketingSpeedAPI.Controllers
                     return Ok(new { ignored = "no key/message" });
                 }
 
+                // 🟢 تجاهل رسائل الجروبات
                 if (remoteJid.EndsWith("@g.us"))
                     return Ok(new { ignored = "group message" });
 
@@ -116,7 +112,6 @@ namespace MarketingSpeedAPI.Controllers
                     Timestamp = DateTime.UtcNow,
                     IsRaeded = false,
                     SessionId = matchedAccount.WasenderSessionId ?? 0
-
                 };
 
                 _db.ChatMessages.Add(msg);
@@ -129,9 +124,9 @@ namespace MarketingSpeedAPI.Controllers
                         msg.Timestamp.ToString("o"));
             }
 
-
             return Ok(new { received = true });
         }
+
         private string ExtractMessageText(JsonElement message)
         {
             if (message.ValueKind != JsonValueKind.Object)

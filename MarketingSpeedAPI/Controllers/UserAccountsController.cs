@@ -71,16 +71,12 @@ namespace MarketingSpeedAPI.Controllers
                     phone_number = req.PhoneNumber,
                     log_messages = req.LogMessages,
                     account_protection =false,
-                    read_incoming_messages = true,
-                    webhook_url = "https://comedically-dcollet-elida.ngrok-free.app/api/webhook",
+                    read_incoming_messages = false,
+                    webhook_url = "http://185-237-15-107.cloud-xip.com/api/webhook",
                     webhook_enabled = true,
                     webhook_events = new[]
     {
-        "messages.received",
-        "session.status",
-        "messages.update",
-        "message-receipt.update",
-    "message.sent"
+        "messages-personal.received"
     }
                 });
 
@@ -124,16 +120,13 @@ namespace MarketingSpeedAPI.Controllers
                     phone_number = req.PhoneNumber,
                     account_protection = false,
                     log_messages = req.LogMessages,
-                    read_incoming_messages = true,
-                    webhook_url = "https://comedically-dcollet-elida.ngrok-free.app/api/webhook",
+                    read_incoming_messages = false,
+                    webhook_url = "http://185-237-15-107.cloud-xip.com/api/webhook",
                     webhook_enabled = true,
                     webhook_events = new[]
     {
-        "messages.received",
-        "session.status",
-        "messages.update",
-        "message-receipt.update",
-    "message.sent"
+        "messages-personal.received"
+       
     }
                 };
 
@@ -179,16 +172,12 @@ namespace MarketingSpeedAPI.Controllers
                 phone_number = req.PhoneNumber,
                 log_messages = req.LogMessages,
                 account_protection = false,
-                read_incoming_messages = true,
-                webhook_url = "https://comedically-dcollet-elida.ngrok-free.app/api/webhook",
+                read_incoming_messages = false,
+                webhook_url = "http://185-237-15-107.cloud-xip.com/api/webhook",
                 webhook_enabled = true,
                 webhook_events = new[]
 {
-    "messages.received",
-    "session.status",
-    "messages.update",
-    "message-receipt.update",
-    "message.sent"
+   "messages-personal.received",
 }
             });
 
