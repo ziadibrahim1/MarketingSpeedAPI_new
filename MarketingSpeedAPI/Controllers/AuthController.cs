@@ -220,6 +220,91 @@ namespace MarketingSpeedAPI.Controllers
             return Ok(new { message = "Profile updated successfully", user });
         }
 
+
+        [HttpPut("update-profile-settings/{id}")]
+        public async Task<IActionResult> UpdateProfileSettings(int id, [FromBody] UpdateProfileDto dto)
+        {
+            var user = await _context.Users.FindAsync(id);
+            if (user == null)
+                return NotFound(new { message = "User not  found" });
+
+            var emailChanged = false;
+            var oldEmail = user.email;
+
+            if (!string.IsNullOrEmpty(dto.First_Name)) user.first_name = dto.First_Name;
+            if (!string.IsNullOrEmpty(dto.Middle_Name)) user.middle_name = dto.Middle_Name;
+            if (!string.IsNullOrEmpty(dto.Last_Name)) user.last_name = dto.Last_Name;
+            if (!string.IsNullOrEmpty(dto.Country_Code)) user.country_code = dto.Country_Code;
+            if (dto.CountryId.HasValue) user.country = dto.CountryId.Value.ToString();
+            if (!string.IsNullOrEmpty(dto.Phone)) user.phone = dto.Phone;
+            if (!string.IsNullOrEmpty(dto.User_Type)) user.user_type = dto.User_Type;
+            if (!string.IsNullOrEmpty(dto.Company_Name)) user.company_name = dto.Company_Name;
+            if (!string.IsNullOrEmpty(dto.Description)) user.description = dto.Description;
+            if (!string.IsNullOrEmpty(dto.Profile_Picture)) user.profile_picture = dto.Profile_Picture;
+            if (dto.Accept_Notifications.HasValue) user.accept_notifications = dto.Accept_Notifications.Value;
+            if (dto.Accept_Terms.HasValue) user.accept_terms = dto.Accept_Terms.Value;
+            if (!string.IsNullOrEmpty(dto.Language)) user.language = dto.Language;
+            if (!string.IsNullOrEmpty(dto.Theme)) user.theme = dto.Theme;
+            if (dto.last_seen.HasValue) user.last_seen = dto.last_seen;
+
+            if (!string.IsNullOrEmpty(dto.Password))
+                user.password_hash = ComputeSha256Hash(dto.Password);
+
+            if (!string.IsNullOrEmpty(dto.Email) && dto.Email != user.email)
+            {
+                user.email = dto.Email;
+                emailChanged = true;
+
+                string code = new Random().Next(100000, 999999).ToString();
+                user.verification_code = code;
+                user.verification_code_expires_at = DateTime.UtcNow.AddMinutes(2);
+                user.is_email_verified = false;
+
+                await _emailService.SendVerificationEmailAsync(user.email, code);
+            }
+
+            if (!string.IsNullOrEmpty(dto.CityName) && dto.CountryId.HasValue)
+            {
+                var country = await _context.Countries
+                    .Include(c => c.Cities)
+                    .FirstOrDefaultAsync(c => c.Id == dto.CountryId.Value && c.IsActive);
+
+                if (country == null)
+                    return BadRequest(new { message = "Country not found" });
+
+                var city = country.Cities.FirstOrDefault(c =>
+                    c.IsActive &&
+                    (c.NameAr == dto.CityName || c.NameEn == dto.CityName)
+                );
+
+                if (city == null)
+                {
+                    city = new City
+                    {
+                        NameAr = dto.CityName,
+                        NameEn = dto.CityName,
+                        CountryId = country.Id,
+                        IsActive = true
+                    };
+                    _context.Cities.Add(city);
+                    await _context.SaveChangesAsync();
+                }
+
+                user.city = city.Id;
+            }
+
+            user.updated_at = DateTime.UtcNow;
+            await _context.SaveChangesAsync();
+
+            return Ok(new
+            {
+                message = "Profile updated successfully",
+                user,
+                emailChanged // ← frontend يستخدمه لتوجيه المستخدم لشاشة التحقق
+            });
+        }
+
+      
         [HttpPost("verify-email")]
         public async Task<IActionResult> VerifyEmail([FromBody] VerifyCodeDto dto)
         {

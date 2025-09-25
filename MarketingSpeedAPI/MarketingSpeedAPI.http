@@ -1,4 +1,4 @@
-@MarketingSpeedAPI_HostAddress = http://localhost:5114
+@MarketingSpeedAPI_HostAddress = http://localhost:80
 
 GET {{MarketingSpeedAPI_HostAddress}}/weatherforecast/
 Accept: application/json

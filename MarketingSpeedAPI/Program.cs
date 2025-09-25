@@ -63,31 +63,17 @@ builder.Services.AddSingleton<TelegramClientManager>(sp =>
 // 🔟 SignalR
 builder.Services.AddSignalR();
 
-// ✅ جلب الشهادة من Windows Certificate Store
-var store = new X509Store(StoreName.My, StoreLocation.LocalMachine);
-store.Open(OpenFlags.ReadOnly);
-var certs = store.Certificates.Find(
-    X509FindType.FindByThumbprint,
-    "5ce000fd74f2c3a0242bdec24ffec213a44a2edc", // ضع هنا Thumbprint الشهادة
-    validOnly: false
-);
-
-if (certs.Count == 0)
-{
-    throw new Exception("Certificate not found in LocalMachine\\My store!");
-}
-
-var certificate = certs[0];
-store.Close();
+// ✅ جلب الشهادة من ملف PFX
+var certificate = new X509Certificate2("C:\\certs\\marketingspeed.pfx", "Ziad.@680");
 
 // 🔹 تشغيل Kestrel مع HTTP و HTTPS
 builder.WebHost.UseKestrel(options =>
 {
-    options.ListenAnyIP(80); // HTTP
-    options.ListenAnyIP(443, listenOptions =>
-    {
-        listenOptions.UseHttps(certificate);
-    });
+    options.ListenAnyIP(80);  // HTTP
+    //options.ListenAnyIP(443, listenOptions =>
+    //{
+    //    listenOptions.UseHttps(certificate); // HTTPS رسمي
+    //});
 });
 
 var app = builder.Build();
@@ -101,3 +87,7 @@ app.MapHub<ChatHub>("/chathub");
 
 // 1️⃣3️⃣ Run
 app.Run();
+if (app.Environment.IsDevelopment())
+{
+    app.UseDeveloperExceptionPage();
+}

@@ -8,11 +8,10 @@
         public string? Country_Code { get; set; }
         public string? Phone { get; set; }
         public string? Country { get; set; }
+        public string? Password { get; set; }
+        public string? Email { get; set; }
         public int? CountryId { get; set; }
-
-        // المدينة الجديدة اللي ممكن تضيف لو مش موجودة
         public string? CityName { get; set; }
-
         public int? City { get; set; }
         public string? User_Type { get; set; }
         public string? Company_Name { get; set; }
