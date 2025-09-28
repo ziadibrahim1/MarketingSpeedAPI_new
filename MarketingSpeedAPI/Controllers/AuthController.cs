@@ -42,7 +42,7 @@ namespace MarketingSpeedAPI.Controllers
         public async Task<IActionResult> Login([FromBody] LoginDto dto)
         {
             var lang = (dto.language ?? "en").ToLower();
-            var user = await _context.Users.FirstOrDefaultAsync(u => u.email == dto.email);
+            var user = await _context.Users.FirstOrDefaultAsync(u => u.email == dto.email && u.is_email_verified);
 
             if (user == null)
             {
@@ -133,18 +133,26 @@ namespace MarketingSpeedAPI.Controllers
                     is_email_verified = false
                 };
 
-                // إرسال البريد أولاً
+                // 1️⃣ احفظ اليوزر الأول
+                _context.Users.Add(user);
+                await _context.SaveChangesAsync();
+
+                // 2️⃣ ابعت الإيميل بعد الحفظ
                 var emailSent = await _emailService.SendVerificationEmailAsync(user.email, code);
                 if (!emailSent)
+                {
+                    // لو حابب تلغي التسجيل لو فشل الإيميل
+                    _context.Users.Remove(user);
+                    await _context.SaveChangesAsync();
+
                     return StatusCode(500, new { error = "فشل إرسال بريد التحقق" });
+                }
 
-                _context.Users.Add(user);
-                await _context.SaveChangesAsync(); // هنا بيتولد الـ id (لو auto increment)
-
+                // 3️⃣ رجع الرد للفرونت
                 return Ok(new
                 {
                     message = "تم التسجيل. تم إرسال رمز التحقق إلى بريدك الإلكتروني.",
-                    userId = user.id   // <<< رجع الـ id للموبايل
+                    userId = user.id
                 });
             }
             catch (Exception ex)
@@ -191,16 +199,18 @@ namespace MarketingSpeedAPI.Controllers
 
                 // البحث عن المدينة داخل الدولة
                 var city = country.Cities.FirstOrDefault(c =>
-                    c.IsActive &&
-                    (c.NameAr == dto.CityName || c.NameEn == dto.CityName)
-                );
+    c.IsActive &&
+    ((int.TryParse(dto.CityName, out var cityId) && c.Id == cityId) ||
+     c.NameEn == dto.CityName ||
+     c.NameAr == dto.CityName)
+);
 
                 if (city == null)
                 {
                     // إنشاء المدينة الجديدة
                     city = new City
                     {
-                        NameAr = dto.CityName,  // هنا ممكن تحددي اللغة حسب الحاجة
+                        NameAr = dto.CityName,  
                         NameEn = dto.CityName,
                         CountryId = country.Id,
                         IsActive = true
@@ -235,7 +245,7 @@ namespace MarketingSpeedAPI.Controllers
             if (!string.IsNullOrEmpty(dto.Middle_Name)) user.middle_name = dto.Middle_Name;
             if (!string.IsNullOrEmpty(dto.Last_Name)) user.last_name = dto.Last_Name;
             if (!string.IsNullOrEmpty(dto.Country_Code)) user.country_code = dto.Country_Code;
-            if (dto.CountryId.HasValue) user.country = dto.CountryId.Value.ToString();
+            if (!string.IsNullOrEmpty(dto.Country)) user.country = dto.Country;
             if (!string.IsNullOrEmpty(dto.Phone)) user.phone = dto.Phone;
             if (!string.IsNullOrEmpty(dto.User_Type)) user.user_type = dto.User_Type;
             if (!string.IsNullOrEmpty(dto.Company_Name)) user.company_name = dto.Company_Name;
@@ -263,11 +273,11 @@ namespace MarketingSpeedAPI.Controllers
                 await _emailService.SendVerificationEmailAsync(user.email, code);
             }
 
-            if (!string.IsNullOrEmpty(dto.CityName) && dto.CountryId.HasValue)
+            if (!string.IsNullOrEmpty(dto.CityName) && dto.CityName.All(char.IsLetter))
             {
                 var country = await _context.Countries
                     .Include(c => c.Cities)
-                    .FirstOrDefaultAsync(c => c.Id == dto.CountryId.Value && c.IsActive);
+                    .FirstOrDefaultAsync(c => c.Id == int.Parse(dto.Country) && c.IsActive);
 
                 if (country == null)
                     return BadRequest(new { message = "Country not found" });
@@ -292,10 +302,19 @@ namespace MarketingSpeedAPI.Controllers
 
                 user.city = city.Id;
             }
-
-            user.updated_at = DateTime.UtcNow;
+            else if (dto.City != null)
+            {
+                user.city = dto.City;
+            }
+            else if (!string.IsNullOrEmpty(dto.CityName) && !dto.CityName.All(char.IsLetter))
+            {
+                
+                    user.city = int.Parse(dto.CityName);
+               
+            }
+                user.updated_at = DateTime.UtcNow;
             await _context.SaveChangesAsync();
-
+            
             return Ok(new
             {
                 message = "Profile updated successfully",
@@ -304,7 +323,20 @@ namespace MarketingSpeedAPI.Controllers
             });
         }
 
-      
+        [HttpPut("reset-profile-settings/{id}")]
+        public async Task<IActionResult> resetProfileSettings(int id, [FromBody] UpdateProfileDto dto)
+        {
+            var user = await _context.Users.FindAsync(id);
+                user.email = dto.Email;
+                user.is_email_verified = true;
+            await _context.SaveChangesAsync();
+            return Ok(new
+            {
+                message = "Profile reset successfully",
+                user,
+            });
+        }
+
         [HttpPost("verify-email")]
         public async Task<IActionResult> VerifyEmail([FromBody] VerifyCodeDto dto)
         {
@@ -323,7 +355,42 @@ namespace MarketingSpeedAPI.Controllers
             user.verification_code = null;
             await _context.SaveChangesAsync();
 
-            return Ok(new { message = "تم التحقق من البريد الإلكتروني بنجاح" });
+            return Ok(new
+            {
+                message = "تم التحقق من البريد الإلكتروني بنجاح",
+                userId = user.id // ← هنا نرجع الـ id للمستخدم
+            });
+        }
+
+        [HttpPost("delete-user")]
+        public async Task<IActionResult> DeleteUser([FromBody] DeleteUserDto dto)
+        {
+            if (string.IsNullOrEmpty(dto.Email))
+                return BadRequest(new { error = "Email is required" });
+
+            var user = await _context.Users.FirstOrDefaultAsync(u => u.email == dto.Email);
+            if (user == null)
+                return NotFound(new { error = "المستخدم غير موجود" });
+
+            bool hasPackageLogs = await _context.PackageLogs.AnyAsync(pl => pl.UserId == user.id);
+            bool hasMessages = await _context.Messages.AnyAsync(m => m.UserId == user.id);
+
+            if (hasPackageLogs || hasMessages)
+            {
+                return BadRequest(new { error = "لا يمكن حذف المستخدم لأنه مرتبط بسجلات أخرى" });
+            }
+
+            try
+            {
+                _context.Users.Remove(user);
+                await _context.SaveChangesAsync();
+
+                return Ok(new { message = "تم حذف المستخدم بنجاح" });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { error = "حدث خطأ أثناء حذف المستخدم", details = ex.Message });
+            }
         }
 
         [HttpPost("resend-code")]
@@ -352,7 +419,7 @@ namespace MarketingSpeedAPI.Controllers
             lang = lang.ToLower();
 
             // ترتيب مخصص
-            var gulfCountries = new List<string> { "السعودية", "الإمارات", "الكويت", "قطر", "عمان", "البحرين", "اليمن" };
+            var gulfCountries = new List<string> { "الإمارات", "الكويت", "قطر", "عمان", "البحرين", "اليمن" };
 
             var countries = await _context.Countries
                 .Where(c => c.IsActive)
@@ -362,7 +429,7 @@ namespace MarketingSpeedAPI.Controllers
                     Name = lang == "ar" ? c.NameAr : c.NameEn,
                     c.IsoCode,
                     c.PhoneCode,
-                    NameAr = c.NameAr // لحساب الترتيب
+                    NameAr = c.NameAr
                 })
                 .ToListAsync();
 
@@ -370,7 +437,7 @@ namespace MarketingSpeedAPI.Controllers
             var orderedCountries = countries
                 .OrderBy(c => c.NameAr == "السعودية" ? 0 :
                               gulfCountries.Contains(c.NameAr) ? 1 : 2) // السعودية أولًا، دول الخليج ثانيًا، باقي الدول ثالثًا
-                .ThenBy(c => c.NameAr) // ترتيب أبجدي داخل كل مجموعة
+                .ThenBy(c => c.Name) // ترتيب أبجدي حسب اللغة المطلوبة داخل كل مجموعة
                 .Select(c => new
                 {
                     c.Id,
@@ -383,7 +450,6 @@ namespace MarketingSpeedAPI.Controllers
             return Ok(orderedCountries);
         }
 
-
         [HttpGet("GetCities")]
         public async Task<IActionResult> GetCities(int countryId, string lang = "ar")
         {
@@ -392,10 +458,16 @@ namespace MarketingSpeedAPI.Controllers
                 .Select(c => new {
                     id = c.Id,
                     name = lang.ToLower() == "ar" ? c.NameAr : c.NameEn
-                }).ToListAsync();
+                })
+                .ToListAsync();
+ 
+            var filteredCities = cities
+                .Where(c => !int.TryParse(c.name, out _))
+                .ToList();
 
-            return Ok(cities);
+            return Ok(filteredCities);
         }
+
 
         [HttpGet("GetTerms")]
         public async Task<IActionResult> GetTerms(string lang = "en")
@@ -593,19 +665,20 @@ namespace MarketingSpeedAPI.Controllers
             return Ok(new { message = "", user });
         }
 
-        [HttpGet("conversations")]
-        public async Task<IActionResult> GetConversations()
+        [HttpGet("conversations/{userId}")]
+        public async Task<IActionResult> GetConversations(int userId)
         {
             var conversations = await _context.Conversations
-                .Where(c => c.Status == "active")
-                .OrderByDescending(m => m.StartedAt)
-                .Include(c => c.Agent) // 👈 هات بيانات موظف الدعم
+                .Where(c => c.Status == "active"
+                            && c.UserId == userId
+                            && c.conversation_messages.Any()) 
+                .OrderByDescending(c => c.StartedAt)
+                .Include(c => c.Agent)
                 .Include(c => c.conversation_messages)
                 .Select(c => new
                 {
                     id = c.Id,
                     lastMessage = c.conversation_messages
-                        
                         .OrderByDescending(m => m.SentAt)
                         .Select(m => m.MessageText)
                         .FirstOrDefault(),
@@ -617,7 +690,6 @@ namespace MarketingSpeedAPI.Controllers
 
             return Ok(conversations);
         }
-
 
         [HttpGet("conversations/{id}/get_messages")]
         public async Task<IActionResult> GetMessages(int id)

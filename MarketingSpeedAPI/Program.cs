@@ -5,6 +5,7 @@ using MarketingSpeedAPI.Models;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using System.Security.Cryptography.X509Certificates;
+using TL;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -34,6 +35,7 @@ builder.Services.AddMemoryCache();
 // 6️⃣ Hosted Services
 builder.Services.AddHostedService<DeleteUnverifiedUsersJob>();
 
+
 // 7️⃣ HttpClient
 builder.Services.AddHttpClient("Wasender", client =>
 {
@@ -54,17 +56,20 @@ builder.Services.AddCors(options =>
 
 // 9️⃣ Telegram Manager
 builder.Services.Configure<TelegramOptions>(builder.Configuration.GetSection("Telegram"));
-builder.Services.AddSingleton<TelegramClientManager>(sp =>
+builder.Services.AddSingleton<Func<TelegramClientManager>>(sp =>
 {
-    var opts = sp.GetRequiredService<IOptions<TelegramOptions>>().Value;
-    return new TelegramClientManager(opts.ApiId, opts.ApiHash, opts.BaseDataDir);
+    return () =>
+    {
+        var opts = sp.GetRequiredService<IOptions<TelegramOptions>>().Value;
+        return new TelegramClientManager(opts.ApiId, opts.ApiHash, opts.BaseDataDir);
+    };
 });
+
 
 // 🔟 SignalR
 builder.Services.AddSignalR();
 
 // ✅ جلب الشهادة من ملف PFX
-var certificate = new X509Certificate2("C:\\certs\\marketingspeed.pfx", "Ziad.@680");
 
 // 🔹 تشغيل Kestrel مع HTTP و HTTPS
 builder.WebHost.UseKestrel(options =>
@@ -86,8 +91,9 @@ app.MapControllers();
 app.MapHub<ChatHub>("/chathub");
 
 // 1️⃣3️⃣ Run
-app.Run();
 if (app.Environment.IsDevelopment())
 {
     app.UseDeveloperExceptionPage();
 }
+app.Run();
+

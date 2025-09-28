@@ -1,5 +1,35 @@
 ﻿namespace MarketingSpeedAPI.Models
 {
+    public static class WhatsAppSafetySettings
+{
+    public const int MinDelaySeconds = 7;
+    public const int MaxDelaySeconds = 10;
+
+    public const int GroupsPerBatch = 10;
+    public const int BatchRestSeconds = 70; 
+
+    public const int MaxConsecutiveFailures = 3;  
+}
+    public class DeleteUserDto
+    {
+        public string Email { get; set; } = string.Empty;
+    }
+    public class SendSingleGroupRequest
+    {
+        public string GroupId { get; set; }
+        public string? Message { get; set; }
+        public List<string>? ImageUrls { get; set; }
+        public long? MainMessageId { get; set; }
+    }
+    public class SendSingleMemberRequest
+    {
+        public int PlatformId { get; set; }           // معرف المنصة (مثل WhatsApp = 1)
+        public string? Recipient { get; set; }       // رقم أو معرف المستلم
+        public string? Message { get; set; }         // نص الرسالة
+        public List<string>? ImageUrls { get; set; } // الصور أو المرفقات
+        public long? MainMessageId { get; set; }     // ID للرسالة الأصلية في الـ DB (اختياري)
+    }
+
     public class UpdateProfileDto
     {
         public string? First_Name { get; set; }

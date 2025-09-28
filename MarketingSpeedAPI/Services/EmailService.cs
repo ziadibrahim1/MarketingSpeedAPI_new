@@ -1,37 +1,47 @@
 ﻿using MailKit.Net.Smtp;
 using MimeKit;
+using System;
+using System.Threading.Tasks;
+
 public class EmailService
 {
-   
+    private readonly string smtpHost = "smtp.gmail.com";
+    private readonly int smtpPort = 587;
+    private readonly string smtpUser = "markting.speed@gmail.com";
+    private readonly string smtpPass = "otdc nfbw ypvx ohon"; // كلمة مرور التطبيق
 
-public async Task<bool> SendVerificationEmailAsync(string toEmail, string code)
-{
-    var email = new MimeMessage();
-
-    email.From.Add(new MailboxAddress("Marketing Speed", "contact@marketingspeed.linkpc.net"));
-    email.To.Add(MailboxAddress.Parse(toEmail));
-    email.Subject = "Marketing Speed";
-    email.Body = new TextPart("plain")
+    public async Task<bool> SendVerificationEmailAsync(string toEmail, string code)
     {
-        Text = $"Your verification code is: {code}"
-    };
+        var email = new MimeMessage();
 
-    using var smtp = new SmtpClient();
-    try
-    {
-        await smtp.ConnectAsync("relay.dnsexit.com", 587, MailKit.Security.SecureSocketOptions.StartTls);
+        // الاسم اللي هيظهر للعميل + البريد الحقيقي
+        email.From.Add(new MailboxAddress("سرعة التسويق", smtpUser));
+        email.To.Add(MailboxAddress.Parse(toEmail));
+        email.Subject = "Verification Code";
+        email.Body = new TextPart("plain")
+        {
+            Text = $"Your verification code is: {code}"
+        };
 
-        await smtp.AuthenticateAsync("marketingspeed", "Ziad.@680");
+        using var smtp = new SmtpClient();
+        try
+        {
+            // الاتصال بـ Gmail باستخدام STARTTLS
+            await smtp.ConnectAsync(smtpHost, smtpPort, MailKit.Security.SecureSocketOptions.StartTls);
 
-        await smtp.SendAsync(email);
-        await smtp.DisconnectAsync(true);
-        return true;
+            // المصادقة باستخدام App Password
+            await smtp.AuthenticateAsync(smtpUser, smtpPass);
+
+            // إرسال البريد
+            await smtp.SendAsync(email);
+
+            await smtp.DisconnectAsync(true);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Email sending failed: {ex.Message}");
+            return false;
+        }
     }
-    catch (Exception ex)
-    {
-        Console.WriteLine($"Email sending failed: {ex.Message}");
-        return false;
-    }
-}
-
 }
