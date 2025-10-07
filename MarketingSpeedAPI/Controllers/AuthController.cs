@@ -497,11 +497,9 @@ namespace MarketingSpeedAPI.Controllers
             var code = new Random().Next(100000, 999999).ToString();
             user.verification_code = code;
             user.verification_code_expires_at = DateTime.UtcNow.AddMinutes(5);
+            await _emailService.SendVerificationEmailAsync(user.email, code);
 
             await _context.SaveChangesAsync();
-
-            // هنا ترسل الكود على الإيميل (SMTP أو أي خدمة Mail)
-            // مثال: EmailService.Send(user.email, "Reset Code", $"Your code is {code}");
 
             return Ok(new { message = "Verification code sent to email" });
         }
@@ -535,6 +533,7 @@ namespace MarketingSpeedAPI.Controllers
 
             return Ok(new { message = "Verification successful" });
         }
+
         [HttpPost("resend-otp-code")]
         public async Task<IActionResult> ResendOtpCode([FromBody] EmailDto dto)
         {
@@ -599,6 +598,7 @@ namespace MarketingSpeedAPI.Controllers
                     u.first_name,
                     u.last_name,
                     u.middle_name,
+                    u.profile_picture,
                     u.email,
                     u.phone,
                     u.country,
@@ -627,13 +627,13 @@ namespace MarketingSpeedAPI.Controllers
         {
             var sessionId = await _context.user_accounts
                 .Where(ua => ua.UserId == userId && ua.PlatformId == platformId)
-                .Select(ua => ua.WasenderSessionId)
+                .Select(ua => new { ua.WasenderSessionId,ua.AccountIdentifier})
                 .FirstOrDefaultAsync();
 
             if (sessionId==null)
                 return NotFound(new { message = "SessionId not found for this user/platform" });
 
-            return Ok(new { WasenderSessionId = sessionId });
+            return Ok(new { WasenderSessionId = sessionId.WasenderSessionId , AccountIdentifier = sessionId.AccountIdentifier });
         }
 
 
@@ -668,28 +668,60 @@ namespace MarketingSpeedAPI.Controllers
         [HttpGet("conversations/{userId}")]
         public async Task<IActionResult> GetConversations(int userId)
         {
+            var emptyConversations = await _context.Conversations
+                .Where(c => c.UserId == userId && !c.conversation_messages.Any())
+                .ToListAsync();
+
+            if (emptyConversations.Any())
+            {
+                _context.Conversations.RemoveRange(emptyConversations);
+                await _context.SaveChangesAsync();
+            }
+
             var conversations = await _context.Conversations
-                .Where(c => c.Status == "active"
+                .Where(c => c.Status != "closed"
                             && c.UserId == userId
-                            && c.conversation_messages.Any()) 
+                            && c.conversation_messages.Any())
                 .OrderByDescending(c => c.StartedAt)
                 .Include(c => c.Agent)
                 .Include(c => c.conversation_messages)
                 .Select(c => new
                 {
+                    status = c.Status,
                     id = c.Id,
+                    coDate = c.StartedAt.HasValue ? c.StartedAt.Value.ToString("dd/MM/yyyy") : "",
                     lastMessage = c.conversation_messages
                         .OrderByDescending(m => m.SentAt)
                         .Select(m => m.MessageText)
                         .FirstOrDefault(),
                     agentName = c.Agent != null
                         ? c.Agent.FirstName + " " + c.Agent.LastName
-                        : "الدعم الفني"
+                        : "الدعم الفني",
+
+                   
+                    unreadCount = c.conversation_messages.Count(m => m.Sender == "support" && m.IsRead == false)
                 })
                 .ToListAsync();
 
             return Ok(conversations);
         }
+
+        [HttpPost("conversations/{id}/mark-as-read")]
+        public async Task<IActionResult> MarkAsRead(int id)
+        {
+            var messages = await _context.conversation_messages
+                .Where(m => m.ConversationId == id && !m.IsRead)
+                .ToListAsync();
+
+            foreach (var msg in messages)
+            {
+                msg.IsRead = true;
+            }
+
+            await _context.SaveChangesAsync();
+            return Ok();
+        }
+
 
         [HttpGet("conversations/{id}/get_messages")]
         public async Task<IActionResult> GetMessages(int id)
@@ -697,18 +729,24 @@ namespace MarketingSpeedAPI.Controllers
             var messages = await _context.conversation_messages
                 .Where(m => m.ConversationId == id)
                 .OrderBy(m => m.SentAt)
-                .Select(m => new {
-                    m.Id,
-                    m.Sender,
-                    m.MessageText,
-                    m.AttachmentUrl,
-                    m.SentAt
-                })
                 .ToListAsync();
+            
+            var unreadMessages = messages.Where(m => !m.IsRead).ToList();
+            foreach (var msg in unreadMessages) msg.IsRead = true;
+            await _context.SaveChangesAsync();
 
-            return Ok(messages);
+            var result = messages.Select(m => new {
+                m.Id,
+                m.Sender,
+                m.MessageText,
+                m.AttachmentUrl,
+                m.SentAt
+            }).ToList();
+
+            return Ok(result);
         }
-        
+
+
         [HttpPost("conversations/{id}/messages")]
         public async Task<IActionResult> SendMessage(int id, [FromBody] SendMessageDto dto)
         {
@@ -784,6 +822,7 @@ namespace MarketingSpeedAPI.Controllers
 
             return Ok(new { success = true, id = entity.Id });
         }
+
         [HttpGet("referral-link/{userId}")]
         public async Task<IActionResult> GetReferralLink(int userId)
         {

@@ -3,6 +3,8 @@ using MarketingSpeedAPI.Hubs;
 using MarketingSpeedAPI.Models;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.SignalR;
+using Microsoft.EntityFrameworkCore;
+using RestSharp;
 using System.Text.Json;
 
 namespace MarketingSpeedAPI.Controllers
@@ -14,12 +16,17 @@ namespace MarketingSpeedAPI.Controllers
         private readonly AppDbContext _db;
         private readonly IHubContext<ChatHub> _hub;
 
-        public WebhookController(AppDbContext db, IHubContext<ChatHub> hubContext)
+        private readonly List<string> allowedPrefixes = new()
+        {
+            "20","966","971","974","973","965","968","967","962","961","963","964","970",
+            "249","218","213","212","216","222","252","253","269"
+        };
+
+        public WebhookController(AppDbContext db, IHubContext<ChatHub> hub)
         {
             _db = db;
-            _hub = hubContext;
+            _hub = hub;
         }
-
         [HttpPost]
         public async Task<IActionResult> Receive()
         {
@@ -30,102 +37,141 @@ namespace MarketingSpeedAPI.Controllers
             }
 
             var headerSig = Request.Headers["x-webhook-signature"].FirstOrDefault();
-
-            // 🟢 لو الطلب ما فيهوش توقيع (زي اختبار Wasender) رجع OK
             if (string.IsNullOrEmpty(headerSig))
-            {
                 return Ok(new { status = "webhook endpoint alive" });
-            }
 
-            // 🟢 تأكيد التوقيع
-            var accounts = _db.user_accounts
-                .Where(a => a.WebhookSecret != null)
-                .ToList();
-
-            UserAccount? matchedAccount = accounts
-                .FirstOrDefault(a => a.WebhookSecret == headerSig);
+            var matchedAccount = await _db.user_accounts
+                .Where(a => a.WebhookSecret != null && a.WebhookSecret == headerSig && a.Status == "connected")
+                .FirstOrDefaultAsync();
 
             if (matchedAccount == null)
-                return Unauthorized(new { error = "Invalid signature" });
+                return Unauthorized(new { error = "Invalid signature or no connected account" });
 
-            // 🟢 قراءة الـ JSON
             var doc = JsonDocument.Parse(body);
             var root = doc.RootElement;
 
             if (!root.TryGetProperty("event", out var eventElement))
                 return Ok(new { ignored = "no event" });
 
-            var eventType = eventElement.GetString();
+            if (eventElement.GetString() != "messages-personal.received")
+                return Ok(new { ignored = "not a personal message" });
 
-            if (eventType == "messages-personal.received")
+            if (!root.TryGetProperty("data", out var data))
+                return Ok(new { ignored = "no data" });
+
+         
+            JsonElement key, message;
+            string remoteJid;
+
+            if (data.TryGetProperty("messages", out var messagesElement))
             {
-                if (!root.TryGetProperty("data", out var data))
-                    return Ok(new { ignored = "no data" });
-
-                JsonElement key;
-                JsonElement message;
-                string remoteJid;
-
-                if (data.TryGetProperty("key", out key) && data.TryGetProperty("message", out message))
+                if (messagesElement.ValueKind == JsonValueKind.Object)
                 {
+                   
+                    messagesElement.TryGetProperty("key", out key);
+                    messagesElement.TryGetProperty("message", out message);
                     remoteJid = key.GetProperty("remoteJid").GetString();
                 }
-                else if (data.TryGetProperty("messages", out var messagesElement))
+                else if (messagesElement.ValueKind == JsonValueKind.Array)
                 {
-                    if (messagesElement.ValueKind == JsonValueKind.Object)
-                    {
-                        if (!messagesElement.TryGetProperty("key", out key))
-                            return Ok(new { ignored = "no key in messages" });
-
-                        messagesElement.TryGetProperty("message", out message);
-                        remoteJid = key.GetProperty("remoteJid").GetString();
-                    }
-                    else if (messagesElement.ValueKind == JsonValueKind.Array)
-                    {
-                        var firstMsg = messagesElement[0];
-                        if (!firstMsg.TryGetProperty("key", out key))
-                            return Ok(new { ignored = "no key in messages array" });
-
-                        firstMsg.TryGetProperty("message", out message);
-                        remoteJid = key.GetProperty("remoteJid").GetString();
-                    }
-                    else
-                    {
-                        return Ok(new { ignored = "messages not object/array" });
-                    }
+                    var firstMsg = messagesElement[0];
+                    firstMsg.TryGetProperty("key", out key);
+                    firstMsg.TryGetProperty("message", out message);
+                    remoteJid = key.GetProperty("remoteJid").GetString();
                 }
                 else
                 {
-                    return Ok(new { ignored = "no key/message" });
+                    return Ok(new { ignored = "messages not object/array" });
                 }
-
-                // 🟢 تجاهل رسائل الجروبات
-                if (remoteJid.EndsWith("@g.us"))
-                    return Ok(new { ignored = "group message" });
-
-                var msg = new ChatMessage
-                {
-                    MessageId = key.GetProperty("id").GetString(),
-                    UserPhone = remoteJid.Split('@')[0],
-                    Text = ExtractMessageText(message),
-                    IsSentByMe = key.GetProperty("fromMe").GetBoolean(),
-                    Timestamp = DateTime.UtcNow,
-                    IsRaeded = false,
-                    SessionId = matchedAccount.WasenderSessionId ?? 0
-                };
-
-                _db.ChatMessages.Add(msg);
-                await _db.SaveChangesAsync();
-
-                await _hub.Clients.Group($"session_{matchedAccount.WasenderSessionId}")
-                    .SendAsync("ReceiveMessage",
-                        msg.UserPhone,
-                        msg.Text,
-                        msg.Timestamp.ToString("o"));
             }
+            else
+            {
+                return Ok(new { ignored = "no key/message" });
+            }
+
+
+            // تجاهل رسائل المجموعات
+            if (remoteJid.EndsWith("@g.us"))
+                return Ok(new { ignored = "group message" });
+
+            // تنظيف الرقم والتحقق من البريفكس
+            var phonePart = remoteJid.Split('@')[0];
+            var cleanNumber = new string(phonePart.Where(char.IsDigit).ToArray());
+
+            if (string.IsNullOrEmpty(cleanNumber) || !allowedPrefixes.Any(p => cleanNumber.StartsWith(p)))
+                return Ok(new { ignored = "invalid number prefix" });
+
+            var msg = new ChatMessage
+            {
+                MessageId = key.GetProperty("id").GetString(),
+                UserPhone = cleanNumber,
+                Text = ExtractMessageText(message),
+                IsSentByMe = key.GetProperty("fromMe").GetBoolean(),
+                Timestamp = DateTime.UtcNow,
+                IsRaeded = false,
+                SessionId = matchedAccount.WasenderSessionId ?? 0,
+                reciverNumber = matchedAccount.AccountIdentifier
+            };
+
+            _db.ChatMessages.Add(msg);
+            await _db.SaveChangesAsync();
+            var ImClient = new RestClient("https://www.wasenderapi.com");
+            var ImRequestContact = new RestRequest($"/api/contacts/{cleanNumber}/picture", Method.Get);
+            ImRequestContact.AddHeader("Authorization", $"Bearer {matchedAccount.AccessToken}");
+            var ImContactResponse = await ImClient.ExecuteAsync(ImRequestContact);
+
+
+            var client = new RestClient("https://www.wasenderapi.com");
+            var requestContact = new RestRequest($"/api/contacts/{cleanNumber}", Method.Get);
+            requestContact.AddHeader("Authorization", $"Bearer {matchedAccount.AccessToken}");
+
+            var contactResponse = await client.ExecuteAsync(requestContact);
+
+            string? imgUrl = null;
+            string? contactName = null;
+
+            if (contactResponse.IsSuccessful)
+            {
+                try
+                {
+                    var contactJson = JsonDocument.Parse(contactResponse.Content);
+                    if (contactJson.RootElement.TryGetProperty("data", out var dataContact))
+                    {
+                        
+                        contactName = dataContact.GetProperty("notify").GetString();
+
+                        msg.ContactName = contactName;
+
+                        if (ImContactResponse.IsSuccessful)
+                        {
+                            var ImContactJson = JsonDocument.Parse(ImContactResponse.Content);
+                            if (ImContactJson.RootElement.TryGetProperty("data", out var ImDataContact))
+                            {
+                                imgUrl = ImDataContact.GetProperty("imgUrl").GetString();
+                                msg.ProfileImageUrl = imgUrl;
+                            }
+                               
+                        }
+
+                        _db.ChatMessages.Update(msg);
+                        await _db.SaveChangesAsync();
+                    }
+                }
+                catch { }
+            }
+
+            
+            await _hub.Clients.Group($"session_{matchedAccount.WasenderSessionId}")
+                .SendAsync("ReceiveMessage",
+                    msg.UserPhone,
+                    msg.Text,
+                    msg.Timestamp.ToString("o"),
+                    imgUrl,
+                    contactName);
 
             return Ok(new { received = true });
         }
+
 
         private string ExtractMessageText(JsonElement message)
         {

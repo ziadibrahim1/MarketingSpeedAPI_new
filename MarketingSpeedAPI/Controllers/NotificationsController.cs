@@ -18,7 +18,7 @@ public class NotificationsController : ControllerBase
     public async Task<IActionResult> GetUserNotifications(int userId)
     {
         var notifications = await _context.user_notifications
-            .Where(un => un.UserId == userId ||  un.UserId ==1 )
+            .Where(un => un.UserId == userId ||  un.UserId == 1 )
             .Include(un => un.Notification)
             .OrderByDescending(un => un.Notification.CreatedAt)
             .Select(un => new NotificationDto
@@ -91,7 +91,7 @@ public class NotificationsController : ControllerBase
         return Ok(new { message = "Notification deleted" });
     }
 
-    // ✅ 5- Delete UserNotification (لو يوزر عايز يمسح اشعار من عنده فقط)
+ 
     [HttpDelete("user/{userId}/{notificationId}")]
     public async Task<IActionResult> DeleteUserNotification(int userId, int notificationId)
     {
@@ -105,7 +105,7 @@ public class NotificationsController : ControllerBase
 
         return Ok(new { message = "User notification deleted" });
     }
-    // ✅ 6 - Get Unread Count
+  
     [HttpGet("user/{userId}/unread-count")]
     public async Task<IActionResult> GetUnreadCount(int userId)
     {

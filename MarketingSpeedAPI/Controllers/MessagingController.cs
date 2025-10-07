@@ -1,4 +1,5 @@
-﻿using MarketingSpeedAPI.Data;
+﻿using JamesWright.SimpleHttp;
+using MarketingSpeedAPI.Data;
 using MarketingSpeedAPI.Models;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -140,8 +141,8 @@ namespace MarketingSpeedAPI.Controllers
             newMessage.Status = allLogs.Any(l => l.Status == "sent") ? "sent" : "failed";
             newMessage.SentAt = DateTime.UtcNow;
 
-            await _context.SaveChangesAsync(); 
-
+            await _context.SaveChangesAsync();
+           
             return Ok(new
             {
                 success = true,
@@ -267,8 +268,6 @@ namespace MarketingSpeedAPI.Controllers
         }
 
 
-
-
         [HttpPut("edit-message/{messageId}")]
         public async Task<IActionResult> EditMessage(long messageId, [FromBody] EditMessageRequest req)
         {
@@ -381,10 +380,23 @@ namespace MarketingSpeedAPI.Controllers
                 return Ok(new { success = false, status = "0", message = "No active subscription" });
 
             var account = await _context.user_accounts
-                .FirstOrDefaultAsync(a => a.UserId == (int)userId && a.PlatformId == 1 && a.Status == "connected");
+                .FirstOrDefaultAsync(a => a.UserId == (int)userId && a.PlatformId == 1 );
+            if (account == null || string.IsNullOrEmpty(account.WasenderSessionId?.ToString()))
+                return Ok(new { success = false, status = "1", message = "No account found" });
 
-            if (account == null )
-                return Ok(new { success = true, status = "0", message = "No account found" });
+            if (account.Status != "connected")
+            {
+                
+                    var deleted1 = await DeleteWasenderSession(account);
+                    if (deleted1)
+                    {
+                        _context.user_accounts.Remove(account);
+                        await _context.SaveChangesAsync();
+                    return Ok(new { success = false, status = "1", message = "No account found" });
+                }
+
+                return Ok(new { success = false, status = "1", message = "No account found" });
+            }
 
             try
             {
@@ -395,42 +407,62 @@ namespace MarketingSpeedAPI.Controllers
 
                 if (!response.IsSuccessful || string.IsNullOrEmpty(response.Content))
                 {
-                    return Ok(new { success = false, status = "0", message = "Wasender not reachable" });
+                    var deleted = await DeleteWasenderSession(account);
+                    if (deleted)
+                    {
+                        _context.user_accounts.Remove(account);
+                        await _context.SaveChangesAsync();
+                        return Ok(new { success = false, status = "1", message = "No account found" });
+                    }
+
+                    return Ok(new { success = false, status = "1", message = "No account found" });
                 }
 
                 var json = System.Text.Json.JsonDocument.Parse(response.Content);
                 var wasenderStatus = json.RootElement.GetProperty("status").GetString();
 
-                if (wasenderStatus != "connected")
+                if (wasenderStatus == "expired")
                 {
-                    // ممكن تحدث الحالة في DB لو حابب
-                    account.Status = "disconnected";
-                    await _context.SaveChangesAsync();
+                    var deleted = await DeleteWasenderSession(account);
+                    if (deleted)
+                    {
+                        _context.user_accounts.Remove(account);
+                        await _context.SaveChangesAsync();
+                        return Ok(new { success = false, status = "1", message = "No account found" });
+                    }
 
-                    return Ok(new { success = false, status = "0", message = "Wasender session not connected" });
+                    return Ok(new { success = false, status = "1", message = "No account found" });
                 }
             }
             catch (Exception ex)
             {
-                return Ok(new { success = false, status = "0", message = "Error connecting to Wasender", error = ex.Message });
+                var deleted = await DeleteWasenderSession(account);
+                if (deleted)
+                {
+                    _context.user_accounts.Remove(account);
+                    await _context.SaveChangesAsync();
+                    return Ok(new { success = false, status = "1", message = "No account found" });
+                }
+
+                return Ok(new { success = false, status = "1", message = "No account found" });
             }
 
             var features = await _context.PackageFeatures
                 .Where(f => f.PackageId == subscription.PackageId && f.PlatformId == 1)
                 .ToListAsync();
 
-            var today2 = DateTime.UtcNow.Date;  
+            var today2 = DateTime.UtcNow.Date;
             var usagesToUpdate = await _context.subscription_usage
                 .Where(u => u.UserId == (int)userId && u.SubscriptionId == subscription.Id)
                 .ToListAsync();
 
             if (subscription.EndDate < today2)
             {
-                usagesToUpdate.ForEach(u => {
+                usagesToUpdate.ForEach(u =>
+                {
                     u.MediaCount = 0;
-                    u.CreatedAt = DateTime.UtcNow; // أو أي تاريخ تحب تحطه
-                }
-                );
+                    u.CreatedAt = DateTime.UtcNow;
+                });
                 await _context.SaveChangesAsync();
             }
 
@@ -445,7 +477,6 @@ namespace MarketingSpeedAPI.Controllers
                 })
                 .ToListAsync();
 
-
             var featuresWithLimits = features.Select(f =>
             {
                 var u = usage.FirstOrDefault(x => x.FeatureId == f.Id);
@@ -455,8 +486,8 @@ namespace MarketingSpeedAPI.Controllers
                     f.feature,
                     LimitCount = f.LimitCount,
                     sendingLimit = f.sendingLimit,
-                    CurrentMessageUsage = f.LimitCount - u?.TotalMessage  ?? 0,
-                    CurrentSendingUsage = u?.TotalMedia  ?? 0,
+                    CurrentMessageUsage = f.LimitCount - (u?.TotalMessage ?? 0),
+                    CurrentSendingUsage = u?.TotalMedia ?? 0,
                     IsMessageLimitExceeded = u != null && u.TotalMessage > f.LimitCount,
                     IsMediaLimitExceeded = u != null && u.TotalMedia > f.sendingLimit
                 };
@@ -470,6 +501,38 @@ namespace MarketingSpeedAPI.Controllers
                 features = featuresWithLimits
             });
         }
+
+        
+        private async Task<bool> DeleteWasenderSession(UserAccount account)
+        {
+            try
+            {
+                var client = new RestClient($"https://www.wasenderapi.com/api/whatsapp-sessions/{account.WasenderSessionId}");
+                var request = new RestRequest("", Method.Delete);  
+                request.AddHeader("Authorization", $"Bearer {_apiKey}");
+
+                var response = await client.ExecuteAsync(request);
+
+                if (response.StatusCode == System.Net.HttpStatusCode.NoContent)
+                {
+                    return true;
+                }
+
+                if (!string.IsNullOrEmpty(response.Content) &&
+                    response.Content.Contains("noaccount", StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+
+
+                return false;
+            }
+            catch (Exception ex)
+            {
+                return false;
+            }
+        }
+
 
 
         [HttpGet("groups-with-members/{userId}/{platformId}")]
@@ -560,12 +623,12 @@ namespace MarketingSpeedAPI.Controllers
             if (groupsJson.RootElement.TryGetProperty("data", out var groups))
             {
                 result = groups.EnumerateArray()
-                    .Where(g => !leftJids.Contains(g.GetProperty("id").GetString()))  
+                      
                     .Select(g => new
                     {
                         id = g.GetProperty("id").GetString(),
-                        name = g.GetProperty("name").GetString() ?? "Unnamed Group"
-                    }).GroupBy(g => g.id)  // إزالة أي تكرار محتمل
+                        name = g.GetProperty("name").GetString()
+                    }).GroupBy(g => g.id) 
     .Select(g => g.First())
     .ToList<object>()
                     .ToList<object>();
@@ -612,7 +675,6 @@ namespace MarketingSpeedAPI.Controllers
             if (account == null || account.WasenderSessionId == null)
                 return NotFound();
 
-            // أولاً جلب كل الجروبات
             var groupsRequest = new RestRequest("/api/groups", Method.Get);
             groupsRequest.AddHeader("Authorization", $"Bearer {account.AccessToken}");
             var groupsResp = await _client.ExecuteAsync(groupsRequest);
@@ -632,7 +694,7 @@ namespace MarketingSpeedAPI.Controllers
                     .ToList();
             }
 
-            var semaphore = new SemaphoreSlim(5); // عدد الـ requests المتوازية
+            var semaphore = new SemaphoreSlim(5); 
             var tasks = groupIds.Select(async groupId =>
             {
                 await semaphore.WaitAsync();
@@ -673,7 +735,7 @@ namespace MarketingSpeedAPI.Controllers
             return Ok(result);
         }
 
-        
+
         [HttpGet("group-members/{userId}/{groupJid}")]
         public async Task<IActionResult> GetGroupMembersByGroupJid(ulong userId, string groupJid)
         {
@@ -685,13 +747,46 @@ namespace MarketingSpeedAPI.Controllers
 
             var request = new RestRequest($"/api/groups/{groupJid}/participants", Method.Get);
             request.AddHeader("Authorization", $"Bearer {account.AccessToken}");
-            var resp = await _client.ExecuteAsync(request);
 
-            if (!resp.IsSuccessful)
-                return StatusCode((int)resp.StatusCode, resp.Content);
+            // تنفيذ الطلب مع retry إذا جاء 429
+            async Task<RestResponse> ExecuteWithRetryAsync()
+            {
+                var resp = await _client.ExecuteAsync(request);
+
+                if ((int)resp.StatusCode == 429) // Too Many Requests
+                {
+                    try
+                    {
+                        using var json = JsonDocument.Parse(resp.Content);
+                        if (json.RootElement.TryGetProperty("retry_after", out var retryProp))
+                        {
+                            int retryAfter = retryProp.GetInt32();
+                            await Task.Delay(retryAfter * 1000); // الانتظار بالثواني
+                            resp = await _client.ExecuteAsync(request); // إعادة المحاولة
+                        }
+                    }
+                    catch
+                    {
+                        using var json = JsonDocument.Parse(resp.Content);
+                        if (json.RootElement.TryGetProperty("retry_after", out var retryProp))
+                        {
+                            int retryAfter = retryProp.GetInt32();
+                            await Task.Delay(retryAfter * 1000); // الانتظار بالثواني
+                            resp = await _client.ExecuteAsync(request); // إعادة المحاولة
+                        }
+                    }
+                }
+
+                return resp;
+            }
+
+            var respFinal = await ExecuteWithRetryAsync();
+
+            if (!respFinal.IsSuccessful)
+                return StatusCode((int)respFinal.StatusCode, respFinal.Content);
 
             var membersList = new List<object>();
-            var membersJson = JsonDocument.Parse(resp.Content);
+            var membersJson = JsonDocument.Parse(respFinal.Content);
 
             if (membersJson.RootElement.TryGetProperty("data", out var members))
             {
@@ -704,17 +799,19 @@ namespace MarketingSpeedAPI.Controllers
                                 ? adminProp.GetString()
                                 : null;
 
-                    // استخرج الرقم فقط من id (قبل @)
+                   
                     var numberOnly = jid?.Split('@')[0];
-
-                    membersList.Add(new
+                    if (!string.IsNullOrWhiteSpace(numberOnly))
                     {
-                        Number = numberOnly,
-                        Id = id,
-                        Jid = jid,
-                        Lid = lid,
-                        Admin = admin
-                    });
+                        membersList.Add(new
+                        {
+                            Number = numberOnly,
+                            Id = id,
+                            Jid = jid,
+                            Lid = lid,
+                            Admin = admin
+                        });
+                    }
                 }
             }
 
@@ -1384,6 +1481,12 @@ namespace MarketingSpeedAPI.Controllers
 
             return Ok(new { success, blocked = isBlocked });
         }
+        string NormalizePhone(string number)
+        {
+            if (string.IsNullOrEmpty(number)) return number;
+            return new string(number.Where(char.IsDigit).ToArray());
+        }
+
         [HttpPost("send-to-single-member/{userId}")]
         public async Task<IActionResult> SendToSingleMember(ulong userId, [FromBody] SendSingleMemberRequest req)
         {
@@ -1401,8 +1504,10 @@ namespace MarketingSpeedAPI.Controllers
             string? finalText = null;
             if (!string.IsNullOrWhiteSpace(req.Message))
             {
-                finalText = SpinText(req.Message); // نفس دالة SpinText في send-to-groups
+                finalText = AddVariations(req.Message); 
             }
+            if (NormalizePhone(account.AccountIdentifier) == NormalizePhone(req.Recipient))
+                return Ok(new { success = false, blocked = false, error = "Recipient number does not match account number" });
 
             var body = new Dictionary<string, object?> { { "to", req.Recipient } };
 
@@ -1436,7 +1541,7 @@ namespace MarketingSpeedAPI.Controllers
                 errorMessage?.Contains("not a participant", StringComparison.OrdinalIgnoreCase) == true ||
                 errorMessage?.Contains("forbidden", StringComparison.OrdinalIgnoreCase) == true
             );
- 
+
             _ = Task.Run(async () =>
             {
                 try
@@ -1486,7 +1591,66 @@ namespace MarketingSpeedAPI.Controllers
 
             return Ok(new { success, blocked = isBlocked });
         }
+
+        private static readonly Random _rand = new Random();
+
+
+        private string AddVariations(string message)
+        {
+            if (string.IsNullOrWhiteSpace(message))
+                return message;
+
+            var variations = new List<string>
+    {
+                    
+        $"{message},",              
+        $"{message}*",                
+        InsertAtNearestSpace(message, "·"),
+         $",{message}",
+        InsertAtNearestSpace(message, "."),
+        $"*{message}",
+        InsertAtNearestSpace(message, ","),
+        $"{message}.",
+        InsertAtNearestSpace(message, "*") ,
+         $". {message}"
+    };
+
+            return variations.OrderBy(x => _rand.Next()).First();
+        }
+
        
+        private string InsertAtNearestSpace(string message, string symbol)
+        {
+            int mid = message.Length / 2;
+
+            int spaceBefore = message.LastIndexOf(' ', mid);
+            int spaceAfter = message.IndexOf(' ', mid);
+
+            int insertPos;
+            if (spaceBefore == -1 && spaceAfter == -1)
+            {
+                insertPos = message.Length;
+            }
+            else if (spaceBefore == -1)
+            {
+                insertPos = spaceAfter;
+            }
+            else if (spaceAfter == -1)
+            {
+                insertPos = spaceBefore;
+            }
+            else
+            {
+                insertPos = (mid - spaceBefore <= spaceAfter - mid) ? spaceBefore : spaceAfter;
+            }
+
+            return message.Substring(0, insertPos) + " " + symbol + " " + message.Substring(insertPos).TrimStart();
+        }
+
+
+       
+
+
         [HttpPost("create-group-from-multiple/{userId}")]
         public async Task<IActionResult> CreateGroupFromMultiple(long userId, [FromBody] CreateGroupRequest req)
         {

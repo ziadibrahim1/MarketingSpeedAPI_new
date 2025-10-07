@@ -2,6 +2,7 @@
 using MarketingSpeedAPI.Models;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Windows.ApplicationModel.Contacts;
 
 namespace MarketingSpeedAPI.Controllers
 {
@@ -24,12 +25,14 @@ namespace MarketingSpeedAPI.Controllers
                 .Select(g => new
                 {
                     userPhone = g.Key,
+                    contactName = g.FirstOrDefault().ContactName,        
+                    profileImageUrl = g.FirstOrDefault().ProfileImageUrl,  
                     chatMessages = g.OrderBy(m => m.Timestamp).Select(m => new
                     {
                         text = m.Text,
                         timestamp = m.Timestamp,
-                        IsRaeded = m.IsRaeded,
-                        isSentByMe = m.IsSentByMe
+                        IsReaded = m.IsRaeded,
+                        isSentByMe = m.IsSentByMe,
                     }).ToList()
                 }).ToListAsync();
 
@@ -71,7 +74,7 @@ namespace MarketingSpeedAPI.Controllers
             return Ok(new { message = "تم حذف المحادثة بنجاح" });
         }
 
-        [HttpPost]
+        [HttpPost("{AddChatMessage}")]
         public async Task<IActionResult> AddChatMessage([FromBody] ChatMessage message)
         {
             message.Timestamp = DateTime.UtcNow;

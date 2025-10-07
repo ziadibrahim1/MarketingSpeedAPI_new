@@ -72,7 +72,7 @@ namespace MarketingSpeedAPI.Controllers
                     log_messages = req.LogMessages,
                     account_protection =false,
                     read_incoming_messages = false,
-                    webhook_url = "http://marketingspeed.linkpc.net/api/webhook",
+                    webhook_url = "http://marketingspeed.online/api/webhook",
                     webhook_enabled = true,
                     webhook_events = new[]
     {
@@ -121,7 +121,7 @@ namespace MarketingSpeedAPI.Controllers
                     account_protection = false,
                     log_messages = req.LogMessages,
                     read_incoming_messages = false,
-                    webhook_url = "http://marketingspeed.linkpc.net/api/webhook",
+                    webhook_url = "http://marketingspeed.online/api/webhook",
                     webhook_enabled = true,
                     webhook_events = new[]
     {
@@ -173,7 +173,7 @@ namespace MarketingSpeedAPI.Controllers
                 log_messages = req.LogMessages,
                 account_protection = false,
                 read_incoming_messages = false,
-                webhook_url = "http://marketingspeed.linkpc.net/api/webhook",
+                webhook_url = "http://marketingspeed.online/api/webhook",
                 webhook_enabled = true,
                 webhook_events = new[]
 {
