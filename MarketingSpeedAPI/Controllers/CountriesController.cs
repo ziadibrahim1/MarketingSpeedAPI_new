@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Newtonsoft.Json.Linq;
 using RestSharp;
+using System.Text.Json;
 
 namespace MarketingSpeedAPI.Controllers
 {
@@ -63,7 +64,6 @@ namespace MarketingSpeedAPI.Controllers
         {
             var today = DateTime.UtcNow.Date;
 
-            // جلب الحد الأقصى للمجموعات حسب الاشتراك
             var maxLimit = await _context.UserSubscriptions
                 .Where(s => s.UserId == (int)userId &&
                             s.IsActive &&
@@ -79,30 +79,32 @@ namespace MarketingSpeedAPI.Controllers
                 .Select(j => "https://chat.whatsapp.com/" + j.group_invite_code)
                 .ToListAsync();
 
-               var groups = await _context.company_groups
-                .Where(g => g.IsActive
-                            && !g.IsHidden
-                            && g.CountryId == CountryID
-                            && g.CategoryId == CategoryID
-                            && !joinedInviteCodes.Contains(g.InviteLink)) 
-                .Include(g => g.OurGroupsCountry)
-                .Include(g => g.OurGroupsCategory)
-                .Select(g => new CompanyGroup
-                {
-                    Id = g.Id,
-                    GroupName = g.GroupName,
-                    InviteLink = g.InviteLink,
-                    Description = g.Description,
-                    Price = g.Price,
-                    IsActive = g.IsActive,
-                    IsHidden = g.IsHidden,
-                    SendingStatus = g.SendingStatus,
-                    CountryNameAr = g.OurGroupsCountry != null ? g.OurGroupsCountry.NameAr : "",
-                    CountryNameEn = g.OurGroupsCountry != null ? g.OurGroupsCountry.NameEn : "",
-                    CategoryNameAr = g.OurGroupsCategory != null ? g.OurGroupsCategory.NameAr : "",
-                    CategoryNameEn = g.OurGroupsCategory != null ? g.OurGroupsCategory.NameEn : ""
-                })
-                .ToListAsync();
+            var groups = await _context.company_groups
+             .Where(g => g.IsActive
+                         && !g.IsHidden
+                         && g.CountryId == CountryID
+                         && g.CategoryId == CategoryID
+                         && !joinedInviteCodes.Contains(g.InviteLink))
+             .Include(g => g.OurGroupsCountry)
+             .Include(g => g.OurGroupsCategory)
+             .Select(g => new CompanyGroup
+             {
+                 Id = g.Id,
+                 GroupName = g.GroupName,
+                 InviteLink = g.InviteLink,
+                 Description = g.Description,
+                 Price = g.Price,
+                 IsActive = g.IsActive,
+                 IsHidden = g.IsHidden,
+                 SendingStatus = g.SendingStatus,
+                 CountryNameAr = g.OurGroupsCountry != null ? g.OurGroupsCountry.NameAr : "",
+                 CountryNameEn = g.OurGroupsCountry != null ? g.OurGroupsCountry.NameEn : "",
+                 CategoryNameAr = g.OurGroupsCategory != null ? g.OurGroupsCategory.NameAr : "",
+                 CategoryNameEn = g.OurGroupsCategory != null ? g.OurGroupsCategory.NameEn : ""
+             })
+             .ToListAsync();
+
+
 
             return Ok(new GroupListResponse
             {
@@ -110,6 +112,7 @@ namespace MarketingSpeedAPI.Controllers
                 Groups = groups
             });
         }
+
 
 
         [HttpGet("group-size/{inviteCode}/{userId}")]
@@ -183,12 +186,62 @@ namespace MarketingSpeedAPI.Controllers
             if (string.IsNullOrWhiteSpace(req.Code))
                 return BadRequest(new { success = false, message = "Invite code is required" });
 
-            var request = new RestRequest("/api/groups/invite/accept", Method.Post);
-            request.AddHeader("Authorization", $"Bearer {account.AccessToken}");
-            request.AddHeader("Content-Type", "application/json");
-            request.AddJsonBody(new { code = req.Code });
+            // ✅ 1) جلب بيانات المجموعة من رابط الدعوة
+            var inviteRequest = new RestRequest($"/api/groups/invite/{req.Code}", Method.Get);
+            inviteRequest.AddHeader("Authorization", $"Bearer {account.AccessToken}");
+            var inviteResp = await _client.ExecuteAsync(inviteRequest);
+            await Task.Delay(2000);
 
-            var response = await _client.ExecuteAsync(request);
+            if (!inviteResp.IsSuccessful)
+            {
+                return StatusCode((int)inviteResp.StatusCode, new
+                {
+                    success = false,
+                    message = "Failed to fetch invite group info",
+                    details = inviteResp.Content
+                });
+            }
+
+            var inviteJson = JObject.Parse(inviteResp.Content);
+            var inviteGroupId = inviteJson["data"]?["id"]?.ToString();
+
+            if (string.IsNullOrEmpty(inviteGroupId))
+            {
+                return BadRequest(new { success = false, message = "Invalid invite code response" });
+            }
+
+            // ✅ 2) جلب المجموعات الحالية للمستخدم
+            var groupsRequest = new RestRequest("/api/groups", Method.Get);
+            groupsRequest.AddHeader("Authorization", $"Bearer {account.AccessToken}");
+            var groupsResp = await _client.ExecuteAsync(groupsRequest);
+            await Task.Delay(2000);
+            if (!groupsResp.IsSuccessful)
+                return StatusCode((int)groupsResp.StatusCode, groupsResp.Content);
+
+            var groupsJson = JObject.Parse(groupsResp.Content);
+            var existingGroups = groupsJson["data"]?.ToObject<List<JObject>>() ?? new List<JObject>();
+
+            // ✅ 3) تحقق هل المستخدم بالفعل عضو في نفس المجموعة
+            bool alreadyMember = existingGroups.Any(g =>
+                string.Equals(g["id"]?.ToString(), inviteGroupId, StringComparison.OrdinalIgnoreCase));
+            if (alreadyMember)
+            {
+                return Ok(new
+                {
+                    success = true,
+                    message = "Already a member of this group",
+                    skipped = true,
+                    groupId = inviteGroupId
+                });
+            }
+
+            // ✅ 4) الانضمام للمجموعة فعليًا
+            var joinRequest = new RestRequest("/api/groups/invite/accept", Method.Post);
+            joinRequest.AddHeader("Authorization", $"Bearer {account.AccessToken}");
+            joinRequest.AddHeader("Content-Type", "application/json");
+            joinRequest.AddJsonBody(new { code = req.Code });
+
+            var response = await _client.ExecuteAsync(joinRequest);
 
             if (!response.IsSuccessful)
             {
@@ -222,26 +275,21 @@ namespace MarketingSpeedAPI.Controllers
                     subscription.Add_groups_limit -= 1;
                     _context.UserSubscriptions.Update(subscription);
                 }
-                else
+                else if (!existingGroup.is_active)
                 {
-                    if (!existingGroup.is_active)
-                    {
-                        existingGroup.is_active = true;
-                        existingGroup.joined_at = DateTime.UtcNow;
-                        _context.user_joined_groups.Update(existingGroup);
+                    existingGroup.is_active = true;
+                    existingGroup.joined_at = DateTime.UtcNow;
+                    _context.user_joined_groups.Update(existingGroup);
 
-                        subscription.Add_groups_limit -= 1;
-                        _context.UserSubscriptions.Update(subscription);
-                    }
+                    subscription.Add_groups_limit -= 1;
+                    _context.UserSubscriptions.Update(subscription);
                 }
 
                 var leftGroup = await _context.LeftGroups
                     .FirstOrDefaultAsync(l => l.UserId == (int)userId && l.InviteLink == req.Code);
 
                 if (leftGroup != null)
-                {
                     _context.LeftGroups.Remove(leftGroup);
-                }
 
                 await _context.SaveChangesAsync();
 
@@ -264,6 +312,7 @@ namespace MarketingSpeedAPI.Controllers
                 });
             }
         }
+
 
 
         [HttpPost("leave-group/{userId}")]

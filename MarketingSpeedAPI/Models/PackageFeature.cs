@@ -35,6 +35,13 @@ namespace MarketingSpeedAPI.Models
         [Column("PlatformId")]
         public int PlatformId { get; set; }
 
+        [Column("isMain")]
+        public bool isMain { get; set; }=true;
+
+        [Column("forMembers")]
+        public bool forMembers { get; set; }=false;
+
+
         [Column("created_at")]
         public DateTime created_at { get; set; } = DateTime.UtcNow;
 

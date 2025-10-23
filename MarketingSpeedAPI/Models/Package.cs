@@ -16,6 +16,10 @@ namespace MarketingSpeedAPI.Models
         [Column("name")]
         public string Name { get; set; } = string.Empty;
 
+        [Column("color")]
+        public string color { get; set; } = "normal";
+        [Column("Fcolor")]
+        public string Fcolor { get; set; } = "0xFFFFFFFF";
         public string NameEn { get; set; } = string.Empty;
 
         [Column("DescriptionAr")]

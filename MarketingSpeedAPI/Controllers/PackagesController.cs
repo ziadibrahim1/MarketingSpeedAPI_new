@@ -73,6 +73,8 @@ namespace MarketingSpeedAPI.Controllers
                 {
                     Id = p.Id,
                     Name = p.Name,
+                    color = p.color,
+                    Fcolor = p.Fcolor,
                     NameEn = p.NameEn,
                     Price = (double)p.Price,
                     DurationDays = (int)p.DurationDays,
@@ -116,64 +118,160 @@ namespace MarketingSpeedAPI.Controllers
 
                 var subscriptionIds = subscriptions.Select(s => s.Id).ToList();
 
-                // هنجمع usage كله ونخليه جاهز للربط بالfeatures
                 var usageList = await _context.subscription_usage
                     .Where(u => subscriptionIds.Contains(u.SubscriptionId))
                     .ToListAsync();
 
-                var results = subscriptions.Select(s =>
+                var groupedByCategory = subscriptions
+                    .Where(s => s.Package != null)
+                    .GroupBy(s => s.Package.CategoryId)
+                    .ToList();
+
+                var results = new List<object>();
+
+                foreach (var group in groupedByCategory)
                 {
-                    var pkg = s.Package;
-
-                    return new
+                    // 🔹 في حالة وجود اشتراك واحد فقط
+                    if (group.Count() == 1)
                     {
-                        subscription = new
+                        var s = group.First();
+                        var pkg = s.Package;
+
+                        results.Add(new
                         {
-                            s.Id,
-                            s.PlanName,
-                            s.Price,
-                            StartDate = s.StartDate.ToString("yyyy-MM-dd"),
-                            EndDate = s.EndDate.ToString("yyyy-MM-dd"),
-                            s.PaymentStatus,
-                            s.IsActive,
-                            DaysLeft = (s.EndDate.Date - DateTime.UtcNow.Date).Days
-                        },
-                        package = pkg != null ? new
-                        {
-                            pkg.Id,
-                            pkg.Name,
-                            pkg.NameEn,
-                            pkg.ImageUrl,
-                            pkg.DurationDays,
-                            pkg.Discount,
-                            Features = pkg.Features.Select(f =>
+                            subscription = new
                             {
-                                var featureUsage = usageList
-                                    .Where(u => u.SubscriptionId == s.Id &&
-                                                u.ActionType == f.ActionType &&
-                                                u.Channel == f.Channel)
-                                    .ToList();
+                                s.Id,
+                                s.PlanName,
+                                s.Price,
+                                StartDate = s.StartDate.ToString("yyyy-MM-dd"),
+                                EndDate = s.EndDate.ToString("yyyy-MM-dd"),
+                                s.PaymentStatus,
+                                s.IsActive,
+                                DaysLeft = (s.EndDate.Date - DateTime.UtcNow.Date).Days
+                            },
+                            package = pkg != null ? new
+                            {
+                                pkg.Id,
+                                pkg.Name,
+                                pkg.color,
+                                pkg.Fcolor,
+                                pkg.CategoryId,
+                                pkg.NameEn,
+                                pkg.ImageUrl,
+                                pkg.DurationDays,
+                                pkg.Discount,
+                                Features = pkg.Features
+                                    .Where(f => f.isMain)
+                                    .Select(f => new
+                                    {
+                                        f.feature,
+                                        f.FeatureEn,
+                                        f.Channel,
+                                        f.ActionType,
+                                        f.LimitCount,
+                                        f.isMain,
+                                        UsedCount = usageList
+                                            .Where(u => u.SubscriptionId == s.Id &&
+                                                        u.ActionType == f.ActionType &&
+                                                        u.Channel == f.Channel)
+                                            .Sum(u => f.ActionType == "message" ? u.MessageCount :
+                                                      f.ActionType == "media_upload" ? u.MediaCount : 0)
+                                    }).ToList(),
+                                pkg.SubscriberCount
+                            } : null
+                        });
+                    }
+                    else
+                    {
+                        // 🔹 في حالة الدمج (أكثر من باقة في نفس الكاتيجوري)
+                        var firstSub = group.First();
+                        var pkg = firstSub.Package;
+                        var mergedName = string.Join(" + ", group.Select(s => s.Package.Name));
 
-                                int usedCount = 0;
-                                if (f.ActionType == "message")
-                                    usedCount = featureUsage.Sum(u => u.MessageCount );
-                                else if (f.ActionType == "media_upload")
-                                    usedCount = featureUsage.Sum(u => u.MediaCount );
+                        var mergedFeatures = new List<object>();
 
-                                return new
+                        var maxFeatures = group.Max(s => s.Package.Features.Count);
+
+                        for (int i = 0; i < maxFeatures; i++)
+                        {
+                            var sameIndexFeatures = group
+                                .Select(s => s.Package.Features
+                                    .Where(f => f.isMain)
+                                    .Skip(i)
+                                    .Take(1)
+                                    .FirstOrDefault())
+                                .Where(f => f != null)
+                                .ToList();
+
+                            if (!sameIndexFeatures.Any()) continue;
+
+                            var baseFeature = sameIndexFeatures.First();
+
+                            var totalLimit = sameIndexFeatures.Sum(f => f.LimitCount);
+
+                            var usedCount = usageList
+                                .Where(u => group.Any(s => s.Id == u.SubscriptionId) &&
+                                            u.ActionType == baseFeature.ActionType &&
+                                            u.Channel == baseFeature.Channel)
+                                .Sum(u => baseFeature.ActionType == "message" ? u.MessageCount :
+                                          baseFeature.ActionType == "media_upload" ? u.MediaCount : 0);
+
+                            mergedFeatures.Add(new
+                            {
+                                baseFeature.feature,
+                                baseFeature.FeatureEn,
+                                baseFeature.Channel,
+                                baseFeature.ActionType,
+                                LimitCount = totalLimit,
+                                baseFeature.isMain,
+                                UsedCount = usedCount
+                            });
+                        }
+
+                        // ✅ النتيجة بعد الدمج
+                        results.Add(new
+                        {
+                            subscription = new
+                            {
+                                Id = firstSub.Id,
+                                PlanName = mergedName,
+                                Price = group.Sum(s => s.Price),
+                                StartDate = group.Min(s => s.StartDate).ToString("yyyy-MM-dd"),
+                                EndDate = group.Max(s => s.EndDate).ToString("yyyy-MM-dd"),
+                                PaymentStatus = "Merged",
+                                IsActive = true,
+                                DaysLeft = (group.Max(s => s.EndDate).Date - DateTime.UtcNow.Date).Days,
+
+                                // ✅ قائمة الاشتراكات الأصلية
+                                MergedSubscriptionIds = group.Select(s => s.Id).ToList(),
+
+                                // ✅ قائمة الباقات الأصلية المدمجة
+                                MergedPackages = group.Select(s => new
                                 {
-                                    f.feature,
-                                    f.FeatureEn,
-                                    f.Channel,
-                                    f.ActionType,
-                                    f.LimitCount,
-                                    UsedCount = usedCount
-                                };
-                            }).ToList(),
-                            pkg.SubscriberCount
-                        } : null
-                    };
-                }).ToList();
+                                    PackageId = s.PackageId,
+                                    PackageName = s.Package.Name,
+                                    PackageNameEn = s.Package.NameEn,
+                                    s.Package.ImageUrl
+                                }).ToList()
+                            },
+                            package = new
+                            {
+                                pkg.Id,
+                                Name = mergedName,
+                                pkg.color,
+                                pkg.Fcolor,
+                                pkg.CategoryId,
+                                pkg.NameEn,
+                                pkg.ImageUrl,
+                                pkg.DurationDays,
+                                pkg.Discount,
+                                Features = mergedFeatures,
+                                pkg.SubscriberCount
+                            }
+                        });
+                    }
+                }
 
                 return Ok(results);
             }
@@ -252,6 +350,43 @@ namespace MarketingSpeedAPI.Controllers
 
             return Ok(new { message = "Subscription successful", subscriptionId = subscription.Id });
         }
+
+        [HttpPost("unsubscribe")]
+        public async Task<IActionResult> Unsubscribe([FromQuery] int id, [FromQuery] int userId)
+        {
+            // ابحث عن الاشتراك الحالي للمستخدم في هذه الباقة
+            var subscription = await _context.UserSubscriptions
+                .FirstOrDefaultAsync(s => s.UserId == userId && s.PackageId == id && s.IsActive);
+
+            if (subscription == null)
+            {
+                return BadRequest(new { message = "2" }); // لا يوجد اشتراك نشط
+            }
+
+            // قم بإلغاء تفعيل الاشتراك
+            subscription.IsActive = false;
+            subscription.UpdatedAt = DateTime.UtcNow;
+            subscription.PaymentStatus = "cancelled";
+
+            // قلل عدد المشتركين في الباقة
+            var pkg = await _context.Packages.FindAsync(id);
+            if (pkg != null && pkg.SubscriberCount > 0)
+            {
+                pkg.SubscriberCount -= 1;
+            }
+
+            // حدّث المستخدم
+            var user = await _context.Users.FindAsync(userId);
+            if (user != null && user.subscreption == subscription.Id)
+            {
+                user.subscreption = null;
+            }
+
+            await _context.SaveChangesAsync();
+
+            return Ok(new { message = "Unsubscribed successfully" });
+        }
+
 
         [HttpPost("add-usage")]
         public async Task<IActionResult> AddUsage([FromBody] SubscriptionUsage usage)

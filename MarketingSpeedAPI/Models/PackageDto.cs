@@ -4,6 +4,8 @@
     {
         public int Id { get; set; }
         public string? Name { get; set; }
+        public string? color { get; set; }
+        public string? Fcolor { get; set; }
         public string? NameEn { get; set; }
         public string? CategoryName { get; set; }
         public string? CategoryNameEN { get; set; }
@@ -24,6 +26,8 @@
         public string Channel { get; set; } = string.Empty;
         public string ActionType { get; set; } = string.Empty;
         public int LimitCount { get; set; } = 0;
+       
+
     }
 
     public class FeatureUsageDto

@@ -71,7 +71,7 @@ namespace MarketingSpeedAPI.Controllers
                     phone_number = req.PhoneNumber,
                     log_messages = req.LogMessages,
                     account_protection =false,
-                    read_incoming_messages = false,
+                    read_incoming_messages = true,
                     webhook_url = "http://marketingspeed.online/api/webhook",
                     webhook_enabled = true,
                     webhook_events = new[]
@@ -120,7 +120,7 @@ namespace MarketingSpeedAPI.Controllers
                     phone_number = req.PhoneNumber,
                     account_protection = false,
                     log_messages = req.LogMessages,
-                    read_incoming_messages = false,
+                    read_incoming_messages = true,
                     webhook_url = "http://marketingspeed.online/api/webhook",
                     webhook_enabled = true,
                     webhook_events = new[]
@@ -172,7 +172,7 @@ namespace MarketingSpeedAPI.Controllers
                 phone_number = req.PhoneNumber,
                 log_messages = req.LogMessages,
                 account_protection = false,
-                read_incoming_messages = false,
+                read_incoming_messages = true,
                 webhook_url = "http://marketingspeed.online/api/webhook",
                 webhook_enabled = true,
                 webhook_events = new[]

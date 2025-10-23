@@ -872,7 +872,8 @@ namespace MarketingSpeedAPI.Controllers
                 .Select(c => new {
                     id = c.Id,
                     nameAr = c.NameAr,
-                    nameEn = c.NameEn
+                    nameEn = c.NameEn,
+                    hint = c.hint
                 })
                 .ToListAsync();
 

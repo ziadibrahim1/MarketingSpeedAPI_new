@@ -66,12 +66,9 @@ builder.Services.AddSingleton<Func<TelegramClientManager>>(sp =>
 });
 
 
-// 🔟 SignalR
 builder.Services.AddSignalR();
 
-// ✅ جلب الشهادة من ملف PFX
 
-// 🔹 تشغيل Kestrel مع HTTP و HTTPS
 builder.WebHost.UseKestrel(options =>
 {
     options.ListenAnyIP(80);  // HTTP
@@ -84,6 +81,7 @@ builder.WebHost.UseKestrel(options =>
 var app = builder.Build();
 
 app.UseCors("AllowAll");
+app.UseStaticFiles();
 app.UseAuthorization();
 
 // 1️⃣2️⃣ Map Controllers + Hubs
