@@ -40,6 +40,8 @@ namespace MarketingSpeedAPI.Models
 
         [Column("forMembers")]
         public bool forMembers { get; set; }=false;
+        [Column("forCreatingGroups")]
+        public bool forCreatingGroups { get; set; }=false;
 
 
         [Column("created_at")]

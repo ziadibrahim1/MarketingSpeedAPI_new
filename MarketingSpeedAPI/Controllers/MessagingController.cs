@@ -368,7 +368,6 @@ namespace MarketingSpeedAPI.Controllers
         {
             var today = DateTime.UtcNow.Date;
 
-            // ✅ نحصل على كل الاشتراكات الفعالة والمدفوعة
             var subscriptions = await _context.UserSubscriptions
                 .Where(s => s.UserId == (int)userId &&
                             s.IsActive &&
@@ -382,7 +381,6 @@ namespace MarketingSpeedAPI.Controllers
             if (subscriptions == null || subscriptions.Count == 0)
                 return Ok(new { success = false, status = "0", message = "No active subscription" });
 
-            // ✅ باقي الكود كما هو لفحص الحساب
             var account = await _context.user_accounts
                 .AsNoTracking()
                 .FirstOrDefaultAsync(a => a.UserId == (int)userId && a.PlatformId == 1);
@@ -401,16 +399,13 @@ namespace MarketingSpeedAPI.Controllers
                 return Ok(new { success = false, status = "1", message = "No account found" });
             }
 
-            // ✅ نحصل على كل الـ PackageIds دفعة واحدة
             var packageIds = subscriptions.Select(s => s.PackageId).Distinct().ToList();
 
-            // ✅ نحصل على كل المميزات لكل الباقات دفعة واحدة
             var features = await _context.PackageFeatures
                 .Where(f => packageIds.Contains(f.PackageId) && f.PlatformId == 1)
                 .AsNoTracking()
                 .ToListAsync();
 
-            // ✅ نحصل على كل الاستخدامات لكل الاشتراكات مرة واحدة
             var subscriptionIds = subscriptions.Select(s => s.Id).ToList();
             var usages = await _context.subscription_usage
                 .Where(u => u.UserId == (int)userId && subscriptionIds.Contains(u.SubscriptionId))
@@ -424,7 +419,6 @@ namespace MarketingSpeedAPI.Controllers
                 })
                 .ToListAsync();
 
-            // ✅ دمج المميزات مع الاستخدامات
             var allFeatures = from sub in subscriptions
                               join f in features on sub.PackageId equals f.PackageId
                               join u in usages on new { sub.Id, featureId = f.Id } equals new { Id = u.SubscriptionId, u.featureId } into usageGroup
@@ -434,6 +428,7 @@ namespace MarketingSpeedAPI.Controllers
                                   f.Id,
                                   f.feature,
                                   f.forMembers,
+                                  f.forCreatingGroups,
                                   f.LimitCount,
                                   f.sendingLimit,
                                   SubscriptionId = sub.Id,
@@ -1340,57 +1335,173 @@ namespace MarketingSpeedAPI.Controllers
             if (account == null || string.IsNullOrEmpty(account.WasenderSessionId?.ToString()))
                 return Ok(new { success = false, blocked = false, error = "No connected account found" });
 
-            string? finalText = null;
-            if (!string.IsNullOrWhiteSpace(req.Message))
-            {
-                finalText = AddVariations(req.Message); 
-            }
             if (NormalizePhone(account.AccountIdentifier) == NormalizePhone(req.Recipient))
-                return Ok(new { success = false, blocked = false, error = "Recipient number does not match account number" });
+                return Ok(new { success = false, blocked = false, error = "Recipient number matches sender" });
 
+            // ✅ دالة توليد اسم واقعي + عشوائي بسيط
+            string GenerateRealisticName()
+            {
+                string[] firstNames = { "Ahmed", "Mohamed", "Ali", "Omar", "Sara", "Mona", "Youssef", "Khaled", "Hassan", "Nour", "Tamer", "Rania", "Lina", "Adel", "Sami", "Ehab", "Walid", "Karim", "Reem", "Fadi" };
+                string[] lastNames = { "Saeed", "Hassan", "Mahmoud", "Ibrahim", "Ali", "Mostafa", "Salem", "Kamel", "Fouad", "Tawfik", "Nasr", "Othman", "Mansour", "Zaki", "Hegazy", "Ramadan", "Khalifa", "Farouk", "Saber", "Ashraf" };
+
+                string first = firstNames[Random.Shared.Next(firstNames.Length)];
+                string last = lastNames[Random.Shared.Next(lastNames.Length)];
+
+                // إضافة 2 أو 3 حروف عشوائية عشان الاسم يكون فريد فعلًا
+                string randomSuffix = new string(Enumerable.Repeat("abcdefghijklmnopqrstuvwxyz", 3)
+                    .Select(s => s[Random.Shared.Next(s.Length)]).ToArray());
+
+                return $"{first} {last} {randomSuffix}";
+            }
+
+            // ✅ إضافة الرقم إلى جهات الاتصال قبل الإرسال
+            try
+            {
+                string uniqueName = GenerateRealisticName(); // مثال: "Ahmed Saeed qzt"
+
+                var contactRequest = new RestRequest("/api/contacts", Method.Put);
+                contactRequest.AddHeader("Authorization", $"Bearer {account.AccessToken}");
+                contactRequest.AddHeader("Content-Type", "application/json");
+
+                var contactBody = new
+                {
+                    jid = $"{NormalizePhone(req.Recipient)}@s.whatsapp.net",
+                    fullName = uniqueName,
+                    saveOnPrimaryAddressbook = true
+                };
+
+                contactRequest.AddJsonBody(contactBody);
+                var contactResponse = await _client.ExecuteAsync(contactRequest);
+
+                if (!contactResponse.IsSuccessful)
+                {
+                   
+                }
+                
+            }
+            catch (Exception ex)
+            {
+                 
+            }
+            await Task.Delay(3000);
+            // ✅ تجهيز جسم الرسالة
             var body = new Dictionary<string, object?> { { "to", req.Recipient } };
 
             if (req.ImageUrls != null && req.ImageUrls.Any())
             {
                 var mediaUrl = req.ImageUrls.First();
                 body[GetMessageTypeFromExtension(mediaUrl)] = mediaUrl;
-                if (finalText != null)
-                    body["text"] = finalText;
+                if (req.Message != null) body["text"] = req.Message;
             }
-            else if (finalText != null)
+            else if (req.Message != null)
             {
-                body["text"] = finalText;
+                body["text"] = req.Message;
             }
 
             if (body.Count <= 1)
                 return Ok(new { success = false, blocked = false, error = "Message body and attachments are empty" });
+            // ✅ إرسال حالة "يكتب الآن" قبل الإرسال
+            if (!string.IsNullOrEmpty(req.Message))
+            {
+                try
+                {
+                    // حساب الوقت التقديري بناء على طول الرسالة
+                    int messageLength = req.Message.Length;
 
+                    // الوقت التقديري لكل حرف (مثلاً 70ms لكل حرف، وحد أقصى 6 ثوانٍ)
+                    int delayMs = Math.Min(messageLength * 70, 1000);
+
+                    // تجهيز طلب presence update
+                    var typingRequest = new RestRequest("/api/send-presence-update", Method.Post);
+                    typingRequest.AddHeader("Authorization", $"Bearer {account.AccessToken}");
+                    typingRequest.AddHeader("Content-Type", "application/json");
+
+                    var presenceBody = new
+                    {
+                        jid = $"{NormalizePhone(req.Recipient)}@s.whatsapp.net",
+                        type = "composing",
+                        delayMs = delayMs  
+                    };
+
+                    typingRequest.AddJsonBody(presenceBody);
+                    var typingResponse = await _client.ExecuteAsync(typingRequest);
+
+                    if (typingResponse.IsSuccessful)
+                    {
+                         
+                    }
+                    else
+                    {
+                         
+                    }
+
+                    // الانتظار نفس مدة الكتابة التقديرية قبل الإرسال الفعلي
+                    await Task.Delay(delayMs);
+                }
+                catch (Exception ex)
+                {
+                     
+                }
+            }
+
+            // ✅ إرسال الرسالة
             var request = new RestRequest("/api/send-message", Method.Post);
             request.AddHeader("Authorization", $"Bearer {account.AccessToken}");
             request.AddHeader("Content-Type", "application/json");
             request.AddJsonBody(body);
 
-            var response = await _client.ExecuteAsync(request);
+            bool success = false;
+            bool isBlocked = false;
+            string? errorMessage = null;
+            string? externalId = null;
 
-            bool success = response.IsSuccessful;
-            string errorMessage = success ? null : (response.ErrorMessage ?? response.Content);
+            const int maxRetries = 3;
+            int attempt = 0;
 
-            bool isBlocked = !success && (
-                errorMessage?.Contains("not found", StringComparison.OrdinalIgnoreCase) == true ||
-                errorMessage?.Contains("not a participant", StringComparison.OrdinalIgnoreCase) == true ||
-                errorMessage?.Contains("forbidden", StringComparison.OrdinalIgnoreCase) == true
-            );
+            while (attempt < maxRetries)
+            {
+                attempt++;
+                var response = await _client.ExecuteAsync(request);
+
+                if ((int)response.StatusCode == 429)
+                {
+                    int waitSec = Random.Shared.Next(15, 30);
+                    await Task.Delay(waitSec * 1000);
+                    continue;
+                }
+
+                success = response.IsSuccessful;
+                errorMessage = success ? null : (response.ErrorMessage ?? response.Content);
+
+                if (success)
+                {
+                    try
+                    {
+                        externalId = JObject.Parse(response.Content)["data"]?["msgId"]?.ToString();
+                    }
+                    catch { }
+                }
+
+                isBlocked = !success && (
+                    errorMessage?.Contains("not found", StringComparison.OrdinalIgnoreCase) == true ||
+                    errorMessage?.Contains("not a participant", StringComparison.OrdinalIgnoreCase) == true ||
+                    errorMessage?.Contains("forbidden", StringComparison.OrdinalIgnoreCase) == true ||
+                    errorMessage?.Contains("blocked", StringComparison.OrdinalIgnoreCase) == true
+                );
+
+                if (!success && attempt < maxRetries)
+                {
+                    await Task.Delay(Random.Shared.Next(5, 10) * 2000);
+                    continue;
+                }
+
+                break;
+            }
 
             _ = Task.Run(async () =>
             {
                 try
                 {
-                    string? externalId = null;
-                    if (success && !string.IsNullOrEmpty(response.Content))
-                    {
-                        try { externalId = JObject.Parse(response.Content)["data"]?["msgId"]?.ToString(); } catch { }
-                    }
-
                     using var scope = _serviceProvider.CreateScope();
                     var scopedContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
@@ -1409,7 +1520,8 @@ namespace MarketingSpeedAPI.Controllers
 
                     if (isBlocked)
                     {
-                        if (!await scopedContext.BlockedGroups.AnyAsync(bg => bg.GroupId == req.Recipient && bg.UserId == (int)userId))
+                        if (!await scopedContext.BlockedGroups
+                            .AnyAsync(bg => bg.GroupId == req.Recipient && bg.UserId == (int)userId))
                         {
                             scopedContext.BlockedGroups.Add(new BlockedGroup
                             {
@@ -1424,12 +1536,65 @@ namespace MarketingSpeedAPI.Controllers
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "Error in background logging for SendToSingleMember");
+                     
                 }
             });
 
-            return Ok(new { success, blocked = isBlocked });
+            return Ok(new { success, blocked = isBlocked, error = errorMessage });
         }
+
+        private string AddSmartVariation(string message)
+        {
+            var symbols = new[] { ".", "..", "!", "!!", "🤝", "✨", "🙂", "~", "،", "..." };
+            var connectors = new[] { "", " ", " - ", " ~ ", " » ", " : ", " | " };
+            var randomSymbol = symbols[Random.Shared.Next(symbols.Length)];
+            var connector = connectors[Random.Shared.Next(connectors.Length)];
+            var prefix = Random.Shared.NextDouble() < 0.3 ? randomSymbol + connector : "";
+            var suffix = Random.Shared.NextDouble() < 0.6 ? connector + randomSymbol : "";
+            return $"{prefix}{message}{suffix}";
+        }
+
+
+        // ---------- دوال مساعدة جديدة/مساعدة ----------
+
+        private int? ParseRetryAfterSeconds(string? content)
+        {
+            if (string.IsNullOrEmpty(content)) return null;
+            try
+            {
+                using var doc = JsonDocument.Parse(content);
+                if (doc.RootElement.TryGetProperty("retry_after", out var retryProp) && retryProp.ValueKind == JsonValueKind.Number)
+                {
+                    return retryProp.GetInt32();
+                }
+                // أحياناً تكون داخل data أو meta
+                if (doc.RootElement.TryGetProperty("data", out var data) && data.ValueKind == JsonValueKind.Object &&
+                    data.TryGetProperty("retry_after", out var retry2) && retry2.ValueKind == JsonValueKind.Number)
+                {
+                    return retry2.GetInt32();
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        private int? ParseRetryAfterHeaderSeconds(IList<Parameter> headers)
+        {
+            if (headers == null) return null;
+            try
+            {
+                // RestResponse.Headers is a collection of Parameter in RestSharp v107+, قد تختلف حسب النسخة
+                var header = headers.FirstOrDefault(h => string.Equals(h.Name, "Retry-After", StringComparison.OrdinalIgnoreCase));
+                if (header != null && header.Value != null)
+                {
+                    if (int.TryParse(header.Value.ToString(), out int seconds))
+                        return seconds;
+                }
+            }
+            catch { }
+            return null;
+        }
+
 
         private static readonly Random _rand = new Random();
 
@@ -1487,7 +1652,6 @@ namespace MarketingSpeedAPI.Controllers
         }
 
 
-       
 
 
         [HttpPost("create-group-from-multiple/{userId}")]
@@ -1499,105 +1663,135 @@ namespace MarketingSpeedAPI.Controllers
             if (account == null)
                 return Ok(new { success = false, message = "No connected account found" });
 
-            var participants = new HashSet<string>();
+            if (string.IsNullOrWhiteSpace(req.Name))
+                return Ok(new { success = false, message = "Group name is required" });
 
-            foreach (var groupJid in req.SourceGroupIds)
+            // تحقق إذا كانت المجموعة موجودة
+            var existingSubscription = await _context.group_subscriptions
+                .FirstOrDefaultAsync(g => g.UserId == userId && g.GroupId == req.Name && g.Status == "active");
+
+            string groupJid = "";
+            if (existingSubscription != null)
             {
-                var metadataRequest = new RestRequest($"/api/groups/{groupJid}/metadata", Method.Get);
-                metadataRequest.AddHeader("Authorization", $"Bearer {account.AccessToken}");
-
-                var metadataResponse = await _client.ExecuteAsync(metadataRequest);
-                if (!metadataResponse.IsSuccessful)
-                {
-                    return Ok(new { success = false, message = $"Failed to fetch metadata of group {groupJid}", error = metadataResponse.Content });
-                }
-
-                var json = JsonDocument.Parse(metadataResponse.Content);
-                if (json.RootElement.TryGetProperty("success", out var successProp) && successProp.GetBoolean() &&
-                    json.RootElement.TryGetProperty("data", out var data))
-                {
-                    if (data.TryGetProperty("participants", out var participantsArray))
-                    {
-                        foreach (var p in participantsArray.EnumerateArray())
-                        {
-                            var jid = p.GetProperty("jid").GetString();
-                            if (!string.IsNullOrEmpty(jid))
-                                participants.Add(jid);
-                        }
-                    }
-                }
+                groupJid = existingSubscription.GroupId;
             }
-
-            var createRequest = new RestRequest("/api/groups", Method.Post);
-            createRequest.AddHeader("Authorization", $"Bearer {account.AccessToken}");
-            createRequest.AddHeader("Content-Type", "application/json");
-
-            var body = new
+            else
             {
-                name = req.Name,
-                participants = new string[] { } 
-            };
-            createRequest.AddJsonBody(body);
+                // إنشاء المجموعة
+                var createRequest = new RestRequest("/api/groups", Method.Post);
+                createRequest.AddHeader("Authorization", $"Bearer {account.AccessToken}");
+                createRequest.AddHeader("Content-Type", "application/json");
 
-            var createResponse = await _client.ExecuteAsync(createRequest);
-            if (!createResponse.IsSuccessful)
-                return Ok(new { success = false, message = "Failed to create new group", error = createResponse.Content });
+                var initialMembers = req.Members?.Take(2).ToArray() ?? Array.Empty<string>();
+                createRequest.AddJsonBody(new { name = req.Name, participants = initialMembers });
 
-            var jsonResponse = JsonDocument.Parse(createResponse.Content);
-            string groupName = req.Name;
-            string inviteLink = jsonResponse.RootElement.GetProperty("inviteLink").GetString() ?? "";
-            string description = jsonResponse.RootElement.GetProperty("description").GetString() ?? "";
-            int? countryId = 16;
-            int? categoryId = 0;
+                var createResponse = await _client.ExecuteAsync(createRequest);
+                if (!createResponse.IsSuccessful)
+                    return Ok(new { success = false, message = "Failed to create group", error = createResponse.Content });
 
-            var companyGroup = new CompanyGroup
-            {
-                PlatformId = 1,
-                GroupName = groupName,
-                Description = description,
-                InviteLink = inviteLink,
-                CountryId = countryId,
-                CategoryId = categoryId,
-                IsActive = true,
-                IsHidden = false,
-                SendingStatus = "pending",
-                CreatedAt = DateTime.UtcNow
-            };
+                var json = JsonDocument.Parse(createResponse.Content);
+                var data = json.RootElement.GetProperty("data");
+                groupJid = data.GetProperty("id").GetString();
 
-            _context.company_groups.Add(companyGroup);
-            await _context.SaveChangesAsync();
-
-            int batchSize = 10;
-            int delayMilliseconds = 5000;
-            var allParticipants = participants.ToList();
-
-            for (int i = 0; i < allParticipants.Count; i += batchSize)
-            {
-                var batch = allParticipants.Skip(i).Take(batchSize).ToArray();
-
-                var addRequest = new RestRequest($"/api/groups/{inviteLink}/participants/add", Method.Post);
-                addRequest.AddHeader("Authorization", $"Bearer {account.AccessToken}");
-                addRequest.AddHeader("Content-Type", "application/json");
-
-                addRequest.AddJsonBody(new { participants = batch });
-
-                var addResponse = await _client.ExecuteAsync(addRequest);
-                if (!addResponse.IsSuccessful)
+                // حفظ في قاعدة البيانات
+                var sub = new GroupSubscription
                 {
-                    Console.WriteLine($"Failed to add batch starting at index {i}: {addResponse.Content}");
-                }
-
-                if (i + batchSize < allParticipants.Count)
-                    await Task.Delay(delayMilliseconds);
+                    UserId = (int)userId,
+                    GroupId = groupJid,
+                    StartDate = DateTime.UtcNow,
+                    EndDate = DateTime.UtcNow.AddMonths(1),
+                    Status = "active",
+                    LastBatchTime = DateTime.UtcNow
+                };
+                _context.group_subscriptions.Add(sub);
+                await _context.SaveChangesAsync();
             }
 
             return Ok(new
             {
                 success = true,
-                message = "Group created and participants added successfully",
-                data = createResponse.Content
+                message = "Group created or fetched successfully",
+                groupId = groupJid
             });
         }
+
+
+        [HttpPost("add-group-members/{userId}")]
+        public async Task<IActionResult> AddGroupMembers(long userId, [FromBody] AddGroupMembersRequest req)
+        {
+            var account = await _context.user_accounts
+                .FirstOrDefaultAsync(a => a.UserId == (int)userId && a.PlatformId == 1 && a.Status == "connected");
+
+            if (account == null)
+                return Ok(new { success = false, message = "No connected account found" });
+
+            if (string.IsNullOrWhiteSpace(req.GroupId) || req.Members == null || req.Members.Count == 0)
+                return Ok(new { success = false, message = "Invalid request" });
+
+            var results = new List<object>();
+
+            foreach (var member in req.Members)
+            {
+                try
+                {
+                    var addRequest = new RestRequest($"/api/groups/{req.GroupId}/participants/add", Method.Post);
+                    addRequest.AddHeader("Authorization", $"Bearer {account.AccessToken}");
+                    addRequest.AddHeader("Content-Type", "application/json");
+                    addRequest.AddJsonBody(new { participants = new List<string> { member } });
+
+                    var response = await _client.ExecuteAsync(addRequest);
+
+                    bool success = response.IsSuccessful;
+                    string? error = success ? null : response.Content;
+
+                    results.Add(new
+                    {
+                        member,
+                        success,
+                        error
+                    });
+
+                    if (!success)
+                    {
+                        _logger.LogWarning("Failed to add member {Member}: {Error}", member, response.Content);
+                    }
+
+                    // ⏳ انتظار عشوائي بين 10 و 20 ثانية قبل إضافة العضو التالي
+                    int delaySec = Random.Shared.Next(10, 21);
+                    _logger.LogInformation("Waiting {Delay} seconds before adding next member...", delaySec);
+                    await Task.Delay(delaySec * 1000);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Error while adding member {Member}", member);
+                    results.Add(new { member, success = false, error = ex.Message });
+                }
+            }
+
+            // ✅ تحديث وقت آخر Batch بعد الانتهاء
+            try
+            {
+                var sub = await _context.group_subscriptions.FirstOrDefaultAsync(g => g.GroupId == req.GroupId);
+                if (sub != null)
+                {
+                    sub.LastBatchTime = DateTime.UtcNow;
+                    _context.group_subscriptions.Update(sub);
+                    await _context.SaveChangesAsync();
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error while updating LastBatchTime for group {GroupId}", req.GroupId);
+            }
+
+            return Ok(new
+            {
+                success = true,
+                message = "Members processed (added one by one)",
+                results
+            });
+        }
+
 
     }
 }

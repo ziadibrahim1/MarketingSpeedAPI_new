@@ -3,6 +3,7 @@ using MarketingSpeedAPI.Models;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using System.Diagnostics;
 using System.Net.Http.Headers;
 using System.Text.Json;
 
@@ -70,7 +71,7 @@ namespace MarketingSpeedAPI.Controllers
                     name = req.Name,
                     phone_number = req.PhoneNumber,
                     log_messages = req.LogMessages,
-                    account_protection =false,
+                    account_protection = true,
                     read_incoming_messages = true,
                     webhook_url = "http://marketingspeed.online/api/webhook",
                     webhook_enabled = true,
@@ -79,7 +80,6 @@ namespace MarketingSpeedAPI.Controllers
         "messages-personal.received"
     }
                 });
-
                 var respNew = await _client.PostAsync("/api/whatsapp-sessions", bodyNewSession);
                 var createContentNew = await respNew.Content.ReadAsStringAsync();
 
@@ -118,7 +118,7 @@ namespace MarketingSpeedAPI.Controllers
                 {
                     name = req.Name,
                     phone_number = req.PhoneNumber,
-                    account_protection = false,
+                    account_protection = true,
                     log_messages = req.LogMessages,
                     read_incoming_messages = true,
                     webhook_url = "http://marketingspeed.online/api/webhook",
@@ -171,7 +171,7 @@ namespace MarketingSpeedAPI.Controllers
                 name = req.Name,
                 phone_number = req.PhoneNumber,
                 log_messages = req.LogMessages,
-                account_protection = false,
+                account_protection = true,
                 read_incoming_messages = true,
                 webhook_url = "http://marketingspeed.online/api/webhook",
                 webhook_enabled = true,
@@ -180,10 +180,9 @@ namespace MarketingSpeedAPI.Controllers
    "messages-personal.received",
 }
             });
-
             var resp = await _client.PostAsync("/api/whatsapp-sessions", body);
             var createContent = await resp.Content.ReadAsStringAsync();
-
+            
             if (!resp.IsSuccessStatusCode)
                 return StatusCode((int)resp.StatusCode, new { success = false, error = createContent });
 
@@ -206,10 +205,8 @@ namespace MarketingSpeedAPI.Controllers
                 QrCodeExpiry = DateTime.UtcNow.AddSeconds(45),
                 WebhookSecret = webhookSecret
             };
-
             _context.user_accounts.Add(account);
             await _context.SaveChangesAsync();
-
             return Ok(new
             {
                 success = true,

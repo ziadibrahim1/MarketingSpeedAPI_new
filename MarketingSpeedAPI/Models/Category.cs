@@ -23,5 +23,20 @@
 
         public Category Category { get; set; }
     }
+    public class GroupSubscription
+    {
+        public int Id { get; set; }
+        public int UserId { get; set; }
+        public string GroupId { get; set; } = string.Empty;
+        public DateTime StartDate { get; set; }
+        public DateTime EndDate { get; set; }
+        public string Status { get; set; } = "active";
+        public DateTime? LastBatchTime { get; internal set; }
+    }
+    public class AddGroupMembersRequest
+    {
+        public string GroupId { get; set; }
+        public List<string> Members { get; set; } = new();
+    }
 
 }

@@ -41,6 +41,7 @@ namespace MarketingSpeedAPI.Data
         public DbSet<MarketingMessage> marketing_messages { get; set; }
         public DbSet<ChatMessage> ChatMessages { get; set; }
         public DbSet<OurGroupsCountry> categories { get; set; }
+        public DbSet<GroupSubscription> group_subscriptions { get; set; }
         public DbSet<OurGroupsCategory> countries { get; set; }
         public DbSet<CompanyGroup> company_groups { get; set; }
         public DbSet<BlockedChat> blocked_chats { get; set; }

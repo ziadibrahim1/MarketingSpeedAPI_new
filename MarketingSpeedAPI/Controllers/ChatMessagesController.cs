@@ -40,6 +40,7 @@ namespace MarketingSpeedAPI.Controllers
         }
 
         [HttpGet("{userPhone}")]
+       
         public async Task<IActionResult> GetChatMessagesForUser(string userPhone)
         {
             var messages = await _context.ChatMessages
@@ -50,13 +51,28 @@ namespace MarketingSpeedAPI.Controllers
             if (!messages.Any())
                 return NotFound();
 
+            return Ok(messages);
+        }
+
+        [HttpPost("mark-as-read/{userPhone}")]
+        public async Task<IActionResult> MarkMessagesAsRead(string userPhone)
+        {
+            var messages = await _context.ChatMessages
+                .Where(m => m.UserPhone == userPhone && !m.IsRaeded && !m.IsSentByMe)
+                .ToListAsync();
+
+            if (!messages.Any())
+                return Ok(new { message = "لا توجد رسائل لتحديثها" });
+
             foreach (var message in messages)
             {
                 message.IsRaeded = true;
             }
+
             await _context.SaveChangesAsync();
-            return Ok(messages);
+            return Ok(new { message = "تم تحديث الرسائل إلى مقروءة" });
         }
+
 
         [HttpDelete("{userPhone}")]
         public async Task<IActionResult> DeleteChatMessagesForUser(string userPhone)

@@ -112,7 +112,8 @@
     public class CreateGroupRequest
     {
         public string Name { get; set; } = "";
-        public List<string> SourceGroupIds { get; set; } = new List<string>();
+        public string[]? Members { get; set; }
     }
+
 
 }

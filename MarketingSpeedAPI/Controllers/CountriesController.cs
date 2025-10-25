@@ -70,7 +70,7 @@ namespace MarketingSpeedAPI.Controllers
                             s.PaymentStatus == "paid" &&
                             s.StartDate <= today &&
                             s.EndDate >= today)
-                .MaxAsync(s => (int?)s.Add_groups_limit);
+                .SumAsync(s => (int?)s.Add_groups_limit);
 
             int addGroupsLimit = maxLimit ?? 0;
 
@@ -190,7 +190,6 @@ namespace MarketingSpeedAPI.Controllers
             var inviteRequest = new RestRequest($"/api/groups/invite/{req.Code}", Method.Get);
             inviteRequest.AddHeader("Authorization", $"Bearer {account.AccessToken}");
             var inviteResp = await _client.ExecuteAsync(inviteRequest);
-            await Task.Delay(2000);
 
             if (!inviteResp.IsSuccessful)
             {
@@ -214,7 +213,6 @@ namespace MarketingSpeedAPI.Controllers
             var groupsRequest = new RestRequest("/api/groups", Method.Get);
             groupsRequest.AddHeader("Authorization", $"Bearer {account.AccessToken}");
             var groupsResp = await _client.ExecuteAsync(groupsRequest);
-            await Task.Delay(2000);
             if (!groupsResp.IsSuccessful)
                 return StatusCode((int)groupsResp.StatusCode, groupsResp.Content);
 
