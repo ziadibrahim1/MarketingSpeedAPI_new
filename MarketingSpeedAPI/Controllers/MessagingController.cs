@@ -10,6 +10,7 @@ using RestSharp;
 using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using static Org.BouncyCastle.Asn1.Cmp.Challenge;
 
 namespace MarketingSpeedAPI.Controllers
 {
@@ -1320,7 +1321,8 @@ namespace MarketingSpeedAPI.Controllers
             if (string.IsNullOrEmpty(number)) return number;
             return new string(number.Where(char.IsDigit).ToArray());
         }
-
+        private static readonly HashSet<string> _usedSuffixes = new();
+        private static readonly object _suffixLock = new();
         [HttpPost("send-to-single-member/{userId}")]
         public async Task<IActionResult> SendToSingleMember(ulong userId, [FromBody] SendSingleMemberRequest req)
         {
@@ -1338,55 +1340,171 @@ namespace MarketingSpeedAPI.Controllers
             if (NormalizePhone(account.AccountIdentifier) == NormalizePhone(req.Recipient))
                 return Ok(new { success = false, blocked = false, error = "Recipient number matches sender" });
 
-            // ✅ دالة توليد اسم واقعي + عشوائي بسيط
-            string GenerateRealisticName()
+            // ✅ دالة توزيع طبيعي لتوليد تأخيرات بشرية
+                    var rand = new Random();
+
+            double NormalDelay(double meanMs, double stdDevMs, double min, double max)
             {
-                string[] firstNames = { "Ahmed", "Mohamed", "Ali", "Omar", "Sara", "Mona", "Youssef", "Khaled", "Hassan", "Nour", "Tamer", "Rania", "Lina", "Adel", "Sami", "Ehab", "Walid", "Karim", "Reem", "Fadi" };
-                string[] lastNames = { "Saeed", "Hassan", "Mahmoud", "Ibrahim", "Ali", "Mostafa", "Salem", "Kamel", "Fouad", "Tawfik", "Nasr", "Othman", "Mansour", "Zaki", "Hegazy", "Ramadan", "Khalifa", "Farouk", "Saber", "Ashraf" };
+                double u1 = 1.0 - rand.NextDouble();
+                double u2 = 1.0 - rand.NextDouble();
+                double randStdNormal = Math.Sqrt(-2.0 * Math.Log(u1)) * Math.Sin(2.0 * Math.PI * u2);
+                double delay = meanMs + stdDevMs * randStdNormal;
 
-                string first = firstNames[Random.Shared.Next(firstNames.Length)];
-                string last = lastNames[Random.Shared.Next(lastNames.Length)];
+                // إضافة انحراف بسيط من أجزاء الثانية (±300ms)
+                delay += rand.NextDouble() * 600 - 300;
 
-                // إضافة 2 أو 3 حروف عشوائية عشان الاسم يكون فريد فعلًا
-                string randomSuffix = new string(Enumerable.Repeat("abcdefghijklmnopqrstuvwxyz", 3)
-                    .Select(s => s[Random.Shared.Next(s.Length)]).ToArray());
-
-                return $"{first} {last} {randomSuffix}";
+                return Math.Clamp(delay, min, max);
             }
-
-            // ✅ إضافة الرقم إلى جهات الاتصال قبل الإرسال
+            // ✅ محاولة جلب الاسم الحقيقي من واتساب
+            string contactName = string.Empty;
             try
             {
-                string uniqueName = GenerateRealisticName(); // مثال: "Ahmed Saeed qzt"
+                var cleanNumber = NormalizePhone(req.Recipient);
+                var getRequest = new RestRequest($"/api/contacts/{cleanNumber}", Method.Get);
+                getRequest.AddHeader("Authorization", $"Bearer {account.AccessToken}");
+                var getResponse = await _client.ExecuteAsync(getRequest);
 
-                var contactRequest = new RestRequest("/api/contacts", Method.Put);
-                contactRequest.AddHeader("Authorization", $"Bearer {account.AccessToken}");
-                contactRequest.AddHeader("Content-Type", "application/json");
-
-                var contactBody = new
+                if (getResponse.IsSuccessful)
                 {
-                    jid = $"{NormalizePhone(req.Recipient)}@s.whatsapp.net",
-                    fullName = uniqueName,
-                    saveOnPrimaryAddressbook = true
-                };
-
-                contactRequest.AddJsonBody(contactBody);
-                var contactResponse = await _client.ExecuteAsync(contactRequest);
-
-                if (!contactResponse.IsSuccessful)
-                {
-                   
+                    var data = JObject.Parse(getResponse.Content);
+                    contactName = data["data"]?["name"]?.ToString()
+                                  ?? data["data"]?["notify"]?.ToString()
+                                  ?? data["data"]?["verifiedName"]?.ToString()
+                                  ?? "";
                 }
-                
             }
             catch (Exception ex)
             {
-                 
+                Console.WriteLine($"⚠️ Failed to fetch contact name: {ex.Message}");
             }
-            await Task.Delay(3000);
+
+            // ✅ إذا لم يوجد اسم فعلي، نولده عشوائيًا
+            if (string.IsNullOrWhiteSpace(contactName))
+            {
+                string GenerateRealisticName()
+                {
+                    var rand = new Random();
+
+                    string[] arabicFirst = { "زياد", "خالد", "أحمد", "سارة", "نور", "رنا", "ليلى", "عمرو", "نادر", "يوسف", "هاني", "إيمان", "منى", "فاطمة", "رامي", "حسام", "نجلاء", "مراد", "باسم", "أمل" };
+                    string[] arabicLast = { "العتيبي", "الأنصاري", "الشريف", "الهاشمي", "القحطاني", "المصري", "الفاضل", "الزيدي", "الحسيني", "الخطيب", "العوضي", "المنصوري", "السيد", "الزهراني", "البغدادي" };
+
+                    string[] turkishFirst = { "Ahmet", "Mehmet", "Elif", "Zeynep", "Yusuf", "Emre", "Ayşe", "Fatma", "Can", "Eren", "Selin", "Burak", "Merve", "Deniz", "Okan", "Melisa", "Seda" };
+                    string[] turkishLast = { "Demir", "Kaya", "Çelik", "Şahin", "Aydın", "Yıldız", "Polat", "Arslan", "Koç", "Öztürk", "Doğan", "Yalçın", "Güneş" };
+
+                    string[] englishFirst = { "Adam", "Olivia", "Noah", "Emma", "Liam", "Sophia", "James", "Ava", "Ethan", "Mia", "Daniel", "Ella", "Logan", "Isabella", "Lucas", "Chloe" };
+                    string[] englishLast = { "Smith", "Johnson", "Brown", "Jones", "Williams", "Miller", "Taylor", "Wilson", "Anderson", "Thomas", "Jackson", "White" };
+
+                    int lang = rand.Next(3);
+                    string first, last;
+                    if (lang == 0)
+                    {
+                        first = arabicFirst[rand.Next(arabicFirst.Length)];
+                        last = arabicLast[rand.Next(arabicLast.Length)];
+                    }
+                    else if (lang == 1)
+                    {
+                        first = turkishFirst[rand.Next(turkishFirst.Length)];
+                        last = turkishLast[rand.Next(turkishLast.Length)];
+                    }
+                    else
+                    {
+                        first = englishFirst[rand.Next(englishFirst.Length)];
+                        last = englishLast[rand.Next(englishLast.Length)];
+                    }
+
+                    string uniqueSuffix;
+                    lock (_suffixLock)
+                    {
+                        do
+                        {
+                            uniqueSuffix = new string(Enumerable.Repeat("abcdefghijklmnopqrstuvwxyz", 3)
+                                .Select(s => s[rand.Next(s.Length)]).ToArray());
+                        }
+                        while (_usedSuffixes.Contains(uniqueSuffix));
+                        _usedSuffixes.Add(uniqueSuffix);
+                    }
+
+                    string[] templates = new[]
+                    {
+            $"{first} {last}",
+            $"{first} {uniqueSuffix}",
+            $"{first} {last} {uniqueSuffix}",
+            $"{first}-{last}",
+            $"{first}_{last}",
+            $"{first} {last.Substring(0,1).ToUpper()}.",
+            $"{first} {uniqueSuffix.ToUpper()}",
+            $"{last} {first}"
+        };
+
+                    string fullName = templates[rand.Next(templates.Length)];
+
+                    string[] optionalPrefixes = { "", "", "+90 ", "+20 ", "+966 ", "Mr. ", "Ms. ", "" };
+                    fullName = optionalPrefixes[rand.Next(optionalPrefixes.Length)] + fullName;
+
+                    return fullName.Trim();
+                }
+
+                contactName = GenerateRealisticName();
+            }
+             
+            // ✅ إضافة الرقم إلى جهات الاتصال باستخدام الاسم الحقيقي
+            try
+            {
+                var contactRequest = new RestRequest("/api/contacts", Method.Put);
+                contactRequest.AddHeader("Authorization", $"Bearer {account.AccessToken}");
+                contactRequest.AddHeader("Content-Type", "application/json");
+                var contactBody = new
+                {
+                    jid = $"{NormalizePhone(req.Recipient)}@s.whatsapp.net",
+                    fullName = contactName,
+                    saveOnPrimaryAddressbook = true
+                };
+                contactRequest.AddJsonBody(contactBody);
+                await _client.ExecuteAsync(contactRequest);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"⚠️ Error saving contact: {ex.Message}");
+            }
+            try
+            {
+                // دالة توليد عشوائية طبيعية (Box–Muller)
+                double NextGaussian()
+                {
+                    var r = Random.Shared;
+                    double u1 = 1.0 - r.NextDouble();
+                    double u2 = 1.0 - r.NextDouble();
+                    return Math.Sqrt(-2.0 * Math.Log(u1)) * Math.Sin(2.0 * Math.PI * u2);
+                }
+
+                // توزيع طبيعي مقطوع (Truncated Normal)
+                double TruncatedNormal(double mean, double stdDev, double min, double max)
+                {
+                    double val = mean + stdDev * NextGaussian();
+                    if (val < min) val = min + Random.Shared.NextDouble() * (mean - min) * 0.5;
+                    if (val > max) val = max - Random.Shared.NextDouble() * (max - mean) * 0.5;
+                    return val;
+                }
+
+                // 🔹 تأخير طبيعي بين 1200ms إلى 3500ms (≈ 1.2–3.5 ثانية)
+                double mean = 2200.0;      // متوسط طبيعي 2.2 ثانية
+                double stdDev = 600.0;     // انحراف معياري متوسط
+                double delayMs = TruncatedNormal(mean, stdDev, 1200.0, 3500.0);
+
+                // 🔹 إضافة انحراف بسيط ±300ms (جعل السلوك بشري أكثر)
+                delayMs += (Random.Shared.NextDouble() - 0.5) * 600.0;
+
+                if (delayMs < 1000.0) delayMs = 1000.0;  // لا يقل عن 1 ثانية
+                if (delayMs > 4000.0) delayMs = 4000.0;  // لا يزيد عن 4 ثوانٍ
+
+                await Task.Delay(TimeSpan.FromMilliseconds(delayMs));
+            }
+            catch (Exception ex)
+            {
+            }
+
             // ✅ تجهيز جسم الرسالة
             var body = new Dictionary<string, object?> { { "to", req.Recipient } };
-
             if (req.ImageUrls != null && req.ImageUrls.Any())
             {
                 var mediaUrl = req.ImageUrls.First();
@@ -1400,55 +1518,61 @@ namespace MarketingSpeedAPI.Controllers
 
             if (body.Count <= 1)
                 return Ok(new { success = false, blocked = false, error = "Message body and attachments are empty" });
-            // ✅ إرسال حالة "يكتب الآن" قبل الإرسال
+
+            
+             
             if (!string.IsNullOrEmpty(req.Message))
             {
                 try
                 {
-                    // حساب الوقت التقديري بناء على طول الرسالة
                     int messageLength = req.Message.Length;
+ 
+                    // 🔹 إعداد القيم مع أجزاء من الثانية
+                    double meanMs = Math.Max(2000, messageLength * 80.0);  // لا يقل عن 2 ثانية
+                    double stdDev = meanMs * 0.25;
 
-                    // الوقت التقديري لكل حرف (مثلاً 70ms لكل حرف، وحد أقصى 6 ثوانٍ)
-                    int delayMs = Math.Min(messageLength * 70, 1000);
+                    double composing1 = NormalDelay(meanMs, stdDev, 2000, 6000);
+                    double pauseMs = NormalDelay(2500, 700, 800, 2000); // سكون بين 1 و 4 ثواني
+                    double composing2 = NormalDelay(meanMs, stdDev, 2000, 6000);
 
-                    // تجهيز طلب presence update
-                    var typingRequest = new RestRequest("/api/send-presence-update", Method.Post);
-                    typingRequest.AddHeader("Authorization", $"Bearer {account.AccessToken}");
-                    typingRequest.AddHeader("Content-Type", "application/json");
+                    string jid = $"{NormalizePhone(req.Recipient)}@s.whatsapp.net";
 
-                    var presenceBody = new
-                    {
-                        jid = $"{NormalizePhone(req.Recipient)}@s.whatsapp.net",
-                        type = "composing",
-                        delayMs = delayMs  
-                    };
+                    // 🔸 الإشارة الأولى "composing"
+                    var composingReq1 = new RestRequest("/api/send-presence-update", Method.Post);
+                    composingReq1.AddHeader("Authorization", $"Bearer {account.AccessToken}");
+                    composingReq1.AddHeader("Content-Type", "application/json");
+                    composingReq1.AddJsonBody(new { jid, type = "composing", delayMs = (int)composing1 });
 
-                    typingRequest.AddJsonBody(presenceBody);
-                    var typingResponse = await _client.ExecuteAsync(typingRequest);
+                    await _client.ExecuteAsync(composingReq1);
+                    await Task.Delay(TimeSpan.FromMilliseconds(composing1)); // ⏳ الانتظار بأجزاء من الثانية
 
-                    if (typingResponse.IsSuccessful)
-                    {
-                         
-                    }
-                    else
-                    {
-                         
-                    }
+                    // 🔸 فترة السكون بين الإشارتين
+                    await Task.Delay(TimeSpan.FromMilliseconds(pauseMs)); // ⏸️ 1–4 ثواني بأجزاء من الثانية
 
-                    // الانتظار نفس مدة الكتابة التقديرية قبل الإرسال الفعلي
-                    await Task.Delay(delayMs);
+                    // 🔸 الإشارة الثانية "composing"
+                    var composingReq2 = new RestRequest("/api/send-presence-update", Method.Post);
+                    composingReq2.AddHeader("Authorization", $"Bearer {account.AccessToken}");
+                    composingReq2.AddHeader("Content-Type", "application/json");
+                    composingReq2.AddJsonBody(new { jid, type = "composing", delayMs = (int)composing2 });
+
+                    await _client.ExecuteAsync(composingReq2);
+                    await Task.Delay(TimeSpan.FromMilliseconds(composing2)); // ⏳ الانتظار بأجزاء من الثانية
+
+                    // 🔹 بعد الكتابة الثانية، يمكن إضافة تأخير بسيط قبل الإرسال (0.5–1.5 ثانية)
+                    double finalPause = 1100 + rand.NextDouble() * 1800;
+                    await Task.Delay(TimeSpan.FromMilliseconds(finalPause));
                 }
                 catch (Exception ex)
                 {
-                     
+                    Console.WriteLine($"⚠️ Typing simulation failed: {ex.Message}");
                 }
             }
 
             // ✅ إرسال الرسالة
-            var request = new RestRequest("/api/send-message", Method.Post);
-            request.AddHeader("Authorization", $"Bearer {account.AccessToken}");
-            request.AddHeader("Content-Type", "application/json");
-            request.AddJsonBody(body);
+            var sendReq = new RestRequest("/api/send-message", Method.Post);
+            sendReq.AddHeader("Authorization", $"Bearer {account.AccessToken}");
+            sendReq.AddHeader("Content-Type", "application/json");
+            sendReq.AddJsonBody(body);
 
             bool success = false;
             bool isBlocked = false;
@@ -1461,11 +1585,12 @@ namespace MarketingSpeedAPI.Controllers
             while (attempt < maxRetries)
             {
                 attempt++;
-                var response = await _client.ExecuteAsync(request);
+                var response = await _client.ExecuteAsync(sendReq);
 
                 if ((int)response.StatusCode == 429)
                 {
-                    int waitSec = Random.Shared.Next(15, 30);
+                    // ✅ exponential backoff + jitter
+                    int waitSec = (int)(Math.Pow(2, attempt) * 2 + Random.Shared.Next(0, 3));
                     await Task.Delay(waitSec * 1000);
                     continue;
                 }
@@ -1491,13 +1616,14 @@ namespace MarketingSpeedAPI.Controllers
 
                 if (!success && attempt < maxRetries)
                 {
-                    await Task.Delay(Random.Shared.Next(5, 10) * 2000);
+                    await Task.Delay((int)NormalDelay(2000, 500, 1000, 4000));
                     continue;
                 }
 
                 break;
             }
 
+           
             _ = Task.Run(async () =>
             {
                 try
@@ -1515,7 +1641,6 @@ namespace MarketingSpeedAPI.Controllers
                         AttemptedAt = DateTime.UtcNow,
                         ExternalMessageId = externalId
                     };
-
                     scopedContext.message_logs.Add(log);
 
                     if (isBlocked)
@@ -1536,122 +1661,12 @@ namespace MarketingSpeedAPI.Controllers
                 }
                 catch (Exception ex)
                 {
-                     
+                    Console.WriteLine($"⚠️ Log save failed: {ex.Message}");
                 }
             });
 
             return Ok(new { success, blocked = isBlocked, error = errorMessage });
         }
-
-        private string AddSmartVariation(string message)
-        {
-            var symbols = new[] { ".", "..", "!", "!!", "🤝", "✨", "🙂", "~", "،", "..." };
-            var connectors = new[] { "", " ", " - ", " ~ ", " » ", " : ", " | " };
-            var randomSymbol = symbols[Random.Shared.Next(symbols.Length)];
-            var connector = connectors[Random.Shared.Next(connectors.Length)];
-            var prefix = Random.Shared.NextDouble() < 0.3 ? randomSymbol + connector : "";
-            var suffix = Random.Shared.NextDouble() < 0.6 ? connector + randomSymbol : "";
-            return $"{prefix}{message}{suffix}";
-        }
-
-
-        // ---------- دوال مساعدة جديدة/مساعدة ----------
-
-        private int? ParseRetryAfterSeconds(string? content)
-        {
-            if (string.IsNullOrEmpty(content)) return null;
-            try
-            {
-                using var doc = JsonDocument.Parse(content);
-                if (doc.RootElement.TryGetProperty("retry_after", out var retryProp) && retryProp.ValueKind == JsonValueKind.Number)
-                {
-                    return retryProp.GetInt32();
-                }
-                // أحياناً تكون داخل data أو meta
-                if (doc.RootElement.TryGetProperty("data", out var data) && data.ValueKind == JsonValueKind.Object &&
-                    data.TryGetProperty("retry_after", out var retry2) && retry2.ValueKind == JsonValueKind.Number)
-                {
-                    return retry2.GetInt32();
-                }
-            }
-            catch { }
-            return null;
-        }
-
-        private int? ParseRetryAfterHeaderSeconds(IList<Parameter> headers)
-        {
-            if (headers == null) return null;
-            try
-            {
-                // RestResponse.Headers is a collection of Parameter in RestSharp v107+, قد تختلف حسب النسخة
-                var header = headers.FirstOrDefault(h => string.Equals(h.Name, "Retry-After", StringComparison.OrdinalIgnoreCase));
-                if (header != null && header.Value != null)
-                {
-                    if (int.TryParse(header.Value.ToString(), out int seconds))
-                        return seconds;
-                }
-            }
-            catch { }
-            return null;
-        }
-
-
-        private static readonly Random _rand = new Random();
-
-
-        private string AddVariations(string message)
-        {
-            if (string.IsNullOrWhiteSpace(message))
-                return message;
-
-            var variations = new List<string>
-    {
-                    
-        $"{message},",              
-        $"{message}:",                
-        InsertAtNearestSpace(message, "·"),
-         $",{message}",
-        InsertAtNearestSpace(message, "."),
-        $" ~ {message}",
-        InsertAtNearestSpace(message, ","),
-        $"{message}ّ ",
-        InsertAtNearestSpace(message, "’") ,
-         $". {message}"
-    };
-
-            return variations.OrderBy(x => _rand.Next()).First();
-        }
-
-       
-        private string InsertAtNearestSpace(string message, string symbol)
-        {
-            int mid = message.Length / 2;
-
-            int spaceBefore = message.LastIndexOf(' ', mid);
-            int spaceAfter = message.IndexOf(' ', mid);
-
-            int insertPos;
-            if (spaceBefore == -1 && spaceAfter == -1)
-            {
-                insertPos = message.Length;
-            }
-            else if (spaceBefore == -1)
-            {
-                insertPos = spaceAfter;
-            }
-            else if (spaceAfter == -1)
-            {
-                insertPos = spaceBefore;
-            }
-            else
-            {
-                insertPos = (mid - spaceBefore <= spaceAfter - mid) ? spaceBefore : spaceAfter;
-            }
-
-            return message.Substring(0, insertPos) + " " + symbol + " " + message.Substring(insertPos).TrimStart();
-        }
-
-
 
 
         [HttpPost("create-group-from-multiple/{userId}")]
@@ -1792,6 +1807,118 @@ namespace MarketingSpeedAPI.Controllers
             });
         }
 
+        // ✅ Presence: Available
+        [HttpPost("presence/available/{userId}")]
+        public async Task<IActionResult> SendPresenceAvailable(long userId,int delayTime)
+        {
+            var account = await _context.user_accounts
+                .FirstOrDefaultAsync(a => a.UserId == (int)userId && a.PlatformId == 1 && a.Status == "connected");
+
+            if (account == null)
+                return Ok(new { success = false, message = "No connected account found" });
+
+            try
+            {
+                string CleanNumber(string input)
+                {
+                    return new string(input.Where(char.IsDigit).ToArray());
+                }
+
+                var cleanIdentifier = CleanNumber(account.AccountIdentifier);
+                var request = new RestRequest("/api/send-presence-update", Method.Post);
+                request.AddHeader("Authorization", $"Bearer {account.AccessToken}");
+                request.AddHeader("Content-Type", "application/json");
+                request.AddJsonBody(new
+                {
+                    jid = $"{cleanIdentifier}@s.whatsapp.net",
+                    type = "available",
+                    delayMs = delayTime
+                });
+
+                var response = await _client.ExecuteAsync(request);
+                if (!response.IsSuccessful)
+                    return Ok(new { success = false, message = "Failed to send available", error = response.Content });
+
+                return Ok(new { success = true, message = "Presence set to available" });
+            }
+            catch (Exception ex)
+            {
+                return Ok(new { success = false, message = "Error sending available", error = ex.Message });
+            }
+        }
+
+        // ✅ Presence: Unavailable
+        [HttpPost("presence/unavailable/{userId}")]
+        public async Task<IActionResult> SendPresenceUnavailable(long userId, int delayTime)
+        {
+            var account = await _context.user_accounts
+                .FirstOrDefaultAsync(a => a.UserId == (int)userId && a.PlatformId == 1 && a.Status == "connected");
+
+            if (account == null)
+                return Ok(new { success = false, message = "No connected account found" });
+
+            try
+            {
+                string CleanNumber(string input)
+                {
+                    return new string(input.Where(char.IsDigit).ToArray());
+                }
+
+                var cleanIdentifier = CleanNumber(account.AccountIdentifier);
+
+                var request = new RestRequest("/api/send-presence-update", Method.Post);
+                request.AddHeader("Authorization", $"Bearer {account.AccessToken}");
+                request.AddHeader("Content-Type", "application/json");
+                request.AddJsonBody(new
+                {
+                    jid = $"{cleanIdentifier}@s.whatsapp.net",
+                    type = "unavailable",
+                    delayMs = delayTime
+                });
+
+                var response = await _client.ExecuteAsync(request);
+                if (!response.IsSuccessful)
+                    return Ok(new { success = false, message = "Failed to send unavailable", error = response.Content });
+
+                return Ok(new { success = true, message = "Presence set to unavailable" });
+            }
+            catch (Exception ex)
+            {
+                return Ok(new { success = false, message = "Error sending unavailable", error = ex.Message });
+            }
+        }
+
+        // ✅ Restart Session
+        [HttpPost("session/restart/{userId}")]
+        public async Task<IActionResult> RestartSession(long userId)
+        {
+            var account = await _context.user_accounts
+                .FirstOrDefaultAsync(a => a.UserId == (int)userId && a.PlatformId == 1 && a.Status == "connected");
+
+            if (account == null)
+                return Ok(new { success = false, message = "No connected account found" });
+
+            try
+            {
+                var request = new RestRequest($"/api/restart-session/{account.WasenderSessionId}", Method.Post);
+                request.AddHeader("Authorization", $"Bearer {account.AccessToken}");
+
+                var response = await _client.ExecuteAsync(request);
+                if (!response.IsSuccessful)
+                    return Ok(new { success = false, message = "Failed to restart session", error = response.Content });
+
+                // تحديث الحالة محليًا في قاعدة البيانات
+                account.Status = "connected";
+                _context.user_accounts.Update(account);
+                await _context.SaveChangesAsync();
+
+                return Ok(new { success = true, message = "Session restarted successfully" });
+            }
+            catch (Exception ex)
+            {
+                return Ok(new { success = false, message = "Error restarting session", error = ex.Message });
+            }
+        }
 
     }
 }
