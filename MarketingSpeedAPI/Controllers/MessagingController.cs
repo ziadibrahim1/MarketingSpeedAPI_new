@@ -225,6 +225,7 @@ namespace MarketingSpeedAPI.Controllers
             {
                 MessageId = (int)messageId,
                 Recipient = groupId,
+
                 PlatformId = account.PlatformId,
                 Status = success ? "sent" : "failed",
                 ErrorMessage = errorMessage,
@@ -364,11 +365,11 @@ namespace MarketingSpeedAPI.Controllers
 
 
         [HttpGet("check-packege-account/{userId}")]
-
         public async Task<IActionResult> CheckPackegeAccount(ulong userId)
         {
             var today = DateTime.UtcNow.Date;
 
+            // 🔹 الاشتراكات النشطة
             var subscriptions = await _context.UserSubscriptions
                 .Where(s => s.UserId == (int)userId &&
                             s.IsActive &&
@@ -379,76 +380,123 @@ namespace MarketingSpeedAPI.Controllers
                 .AsNoTracking()
                 .ToListAsync();
 
-            if (subscriptions == null || subscriptions.Count == 0)
-                return Ok(new { success = false, status = "0", message = "No active subscription" });
+            bool hasSubscription = subscriptions != null && subscriptions.Count > 0;
+            bool isConnected = false;
 
+            if (!hasSubscription)
+            {
+                return Ok(new
+                {
+                    success = true,
+                    isConnected = false,
+                    hasSubscription = false,
+                    message = "No active subscription",
+                    features = new List<object>()
+                });
+            }
+
+            // 🔹 التأكد من وجود حساب متصل
             var account = await _context.user_accounts
                 .AsNoTracking()
                 .FirstOrDefaultAsync(a => a.UserId == (int)userId && a.PlatformId == 1);
+
             if (account == null || string.IsNullOrEmpty(account.WasenderSessionId?.ToString()))
-                return Ok(new { success = false, status = "1", message = "No account found" });
+            {
+                return Ok(new
+                {
+                    success = true,
+                    isConnected = false,
+                    hasSubscription = true,
+                    message = "No account found",
+                    features = new List<object>()
+                });
+            }
 
             if (account.Status != "connected")
             {
-                var deleted1 = await DeleteWasenderSession(account);
-                if (deleted1)
+                var deleted = await DeleteWasenderSession(account);
+                if (deleted)
                 {
                     _context.user_accounts.Remove(account);
                     await _context.SaveChangesAsync();
-                    return Ok(new { success = false, status = "1", message = "No account found" });
                 }
-                return Ok(new { success = false, status = "1", message = "No account found" });
+
+                return Ok(new
+                {
+                    success = true,
+                    isConnected = false,
+                    hasSubscription = true,
+                    message = "No connected session",
+                    features = new List<object>()
+                });
             }
 
+            // ✅ في هذه المرحلة المستخدم عنده اشتراك + متصل
+            isConnected = true;
+
+            // 🔹 جميع الباقات النشطة
             var packageIds = subscriptions.Select(s => s.PackageId).Distinct().ToList();
 
+            // 🔹 الميزات الرئيسية
             var features = await _context.PackageFeatures
-                .Where(f => packageIds.Contains(f.PackageId) && f.PlatformId == 1)
+                .Where(f => packageIds.Contains(f.PackageId) && f.PlatformId == 1 && f.isMain == true)
                 .AsNoTracking()
                 .ToListAsync();
 
+            // 🔹 الاستخدامات لكل الاشتراكات
             var subscriptionIds = subscriptions.Select(s => s.Id).ToList();
             var usages = await _context.subscription_usage
                 .Where(u => u.UserId == (int)userId && subscriptionIds.Contains(u.SubscriptionId))
-                .GroupBy(u => new { u.SubscriptionId, u.featureId })
-                .Select(g => new
-                {
-                    g.Key.SubscriptionId,
-                    g.Key.featureId,
-                    TotalMessage = g.Sum(x => x.MessageCount),
-                    TotalMedia = g.Sum(x => x.MediaCount)
-                })
+                .AsNoTracking()
                 .ToListAsync();
 
-            var allFeatures = from sub in subscriptions
-                              join f in features on sub.PackageId equals f.PackageId
-                              join u in usages on new { sub.Id, featureId = f.Id } equals new { Id = u.SubscriptionId, u.featureId } into usageGroup
-                              from usage in usageGroup.DefaultIfEmpty()
-                              select new
-                              {
-                                  f.Id,
-                                  f.feature,
-                                  f.forMembers,
-                                  f.forCreatingGroups,
-                                  f.LimitCount,
-                                  f.sendingLimit,
-                                  SubscriptionId = sub.Id,
-                                  PackageId = sub.PackageId,
-                                  CurrentMessageUsage = f.LimitCount - (usage?.TotalMessage ?? 0),
-                                  CurrentSendingUsage = usage?.TotalMedia ?? 0,
-                                  IsMessageLimitExceeded = (usage?.TotalMessage ?? 0) > f.LimitCount,
-                                  IsMediaLimitExceeded = (usage?.TotalMedia ?? 0) > f.sendingLimit
-                              };
+            // 🔹 تجميع البيانات النهائية
+            var result = new List<object>();
+            foreach (var sub in subscriptions)
+            {
+                var subFeatures = features.Where(f => f.PackageId == sub.PackageId).ToList();
+                foreach (var feature in subFeatures)
+                {
+                    var usage = usages.FirstOrDefault(u => u.SubscriptionId == sub.Id && u.FeatureId == feature.Id);
 
+                    int used = usage?.UsedCount ?? 0;
+                    int limit = feature.LimitCount;
+                    int remaining = Math.Max(limit - used, 0);
+
+                    result.Add(new
+                    {
+                        SubscriptionId = sub.Id,
+                        PackageId = sub.PackageId,
+                        sub.PlanName,
+                        sub.Price,
+                        sub.StartDate,
+                        sub.EndDate,
+
+                        FeatureId = feature.Id,
+                        FeatureAr = feature.feature,
+                        FeatureEn = feature.FeatureEn,
+                        forMembers = feature.forMembers,
+                        forCreatingGroups = feature.forCreatingGroups,
+                        forGetingGroups = feature.forGetingGruops,
+
+                        LimitCount = feature.LimitCount,
+                        UsedCount = used,
+                        RemainingCount = remaining,
+                        IsExceeded = remaining <= 0
+                    });
+                }
+            }
+
+            // ✅ النتيجة النهائية
             return Ok(new
             {
                 success = true,
-                status = "1",
-                message = "Ok",
-                features = allFeatures
+                isConnected,
+                hasSubscription,
+                message = "Connected account with active subscriptions",
+                features = result
             });
         }
-
 
 
 
@@ -740,22 +788,20 @@ namespace MarketingSpeedAPI.Controllers
                 foreach (var m in members.EnumerateArray())
                 {
                     var id = m.GetProperty("id").GetString();
-                    var jid = m.GetProperty("jid").GetString();
-                    var lid = m.GetProperty("lid").GetString();
+                    var phoneNumber = m.GetProperty("phoneNumber").GetString();
                     var admin = m.TryGetProperty("admin", out var adminProp) && adminProp.ValueKind != JsonValueKind.Null
                                 ? adminProp.GetString()
                                 : null;
 
                    
-                    var numberOnly = jid?.Split('@')[0];
+                    var numberOnly = phoneNumber?.Split('@')[0];
                     if (!string.IsNullOrWhiteSpace(numberOnly))
                     {
                         membersList.Add(new
                         {
                             Number = numberOnly,
                             Id = id,
-                            Jid = jid,
-                            Lid = lid,
+                            Jid = phoneNumber,
                             Admin = admin
                         });
                     }
@@ -1007,6 +1053,8 @@ namespace MarketingSpeedAPI.Controllers
                         {
                             MessageId = newMessage.Id,
                             Recipient = number,
+                            UserId = (int)req.UserId,
+                            body = req.Message,
                             PlatformId = account.PlatformId,
                             Status = response.IsSuccessful ? "sent" : "failed",
                             ErrorMessage = response.IsSuccessful ? null : response.Content,
@@ -1048,6 +1096,8 @@ namespace MarketingSpeedAPI.Controllers
                     groupLogs.Add(new MessageLog
                     {
                         MessageId = newMessage.Id,
+                        UserId = (int)req.UserId,
+                        body = req.Message,
                         Recipient = number,
                         PlatformId = account.PlatformId,
                         Status = response.IsSuccessful ? "sent" : "failed",
@@ -1288,6 +1338,9 @@ namespace MarketingSpeedAPI.Controllers
 
                     var log = new MessageLog
                     {
+                        UserId = (int)userId,
+                        body = req.Message,
+                        sender = NormalizePhone(account.AccountIdentifier),
                         MessageId = (int)(req.MainMessageId ?? 0), 
                         Recipient = req.GroupId,
                         PlatformId = account.PlatformId,
@@ -1318,11 +1371,20 @@ namespace MarketingSpeedAPI.Controllers
         }
         string NormalizePhone(string number)
         {
-            if (string.IsNullOrEmpty(number)) return number;
-            return new string(number.Where(char.IsDigit).ToArray());
+            if (string.IsNullOrWhiteSpace(number))
+                return string.Empty;
+
+            var digitsOnly = new string(number.Where(char.IsDigit).ToArray());
+
+            if (digitsOnly.StartsWith("00"))
+                digitsOnly = digitsOnly.Substring(2);
+
+            return digitsOnly;
         }
+
         private static readonly HashSet<string> _usedSuffixes = new();
         private static readonly object _suffixLock = new();
+
         [HttpPost("send-to-single-member/{userId}")]
         public async Task<IActionResult> SendToSingleMember(ulong userId, [FromBody] SendSingleMemberRequest req)
         {
@@ -1340,8 +1402,10 @@ namespace MarketingSpeedAPI.Controllers
             if (NormalizePhone(account.AccountIdentifier) == NormalizePhone(req.Recipient))
                 return Ok(new { success = false, blocked = false, error = "Recipient number matches sender" });
 
-            // ✅ دالة توزيع طبيعي لتوليد تأخيرات بشرية
-                    var rand = new Random();
+            var senderNumber = NormalizePhone(account.AccountIdentifier);
+
+         
+            var rand = new Random();
 
             double NormalDelay(double meanMs, double stdDevMs, double min, double max)
             {
@@ -1349,13 +1413,11 @@ namespace MarketingSpeedAPI.Controllers
                 double u2 = 1.0 - rand.NextDouble();
                 double randStdNormal = Math.Sqrt(-2.0 * Math.Log(u1)) * Math.Sin(2.0 * Math.PI * u2);
                 double delay = meanMs + stdDevMs * randStdNormal;
-
-                // إضافة انحراف بسيط من أجزاء الثانية (±300ms)
                 delay += rand.NextDouble() * 600 - 300;
-
                 return Math.Clamp(delay, min, max);
             }
-            // ✅ محاولة جلب الاسم الحقيقي من واتساب
+
+            // ✅ محاولة جلب الاسم من واتساب أو توليد اسم واقعي
             string contactName = string.Empty;
             try
             {
@@ -1378,76 +1440,10 @@ namespace MarketingSpeedAPI.Controllers
                 Console.WriteLine($"⚠️ Failed to fetch contact name: {ex.Message}");
             }
 
-            // ✅ إذا لم يوجد اسم فعلي، نولده عشوائيًا
             if (string.IsNullOrWhiteSpace(contactName))
-            {
-                string GenerateRealisticName()
-                {
-                    var rand = new Random();
-
-                    string[] arabicFirst = { "زياد", "خالد", "أحمد", "سارة", "نور", "رنا", "ليلى", "عمرو", "نادر", "يوسف", "هاني", "إيمان", "منى", "فاطمة", "رامي", "حسام", "نجلاء", "مراد", "باسم", "أمل" };
-                    string[] arabicLast = { "العتيبي", "الأنصاري", "الشريف", "الهاشمي", "القحطاني", "المصري", "الفاضل", "الزيدي", "الحسيني", "الخطيب", "العوضي", "المنصوري", "السيد", "الزهراني", "البغدادي" };
-
-                    string[] turkishFirst = { "Ahmet", "Mehmet", "Elif", "Zeynep", "Yusuf", "Emre", "Ayşe", "Fatma", "Can", "Eren", "Selin", "Burak", "Merve", "Deniz", "Okan", "Melisa", "Seda" };
-                    string[] turkishLast = { "Demir", "Kaya", "Çelik", "Şahin", "Aydın", "Yıldız", "Polat", "Arslan", "Koç", "Öztürk", "Doğan", "Yalçın", "Güneş" };
-
-                    string[] englishFirst = { "Adam", "Olivia", "Noah", "Emma", "Liam", "Sophia", "James", "Ava", "Ethan", "Mia", "Daniel", "Ella", "Logan", "Isabella", "Lucas", "Chloe" };
-                    string[] englishLast = { "Smith", "Johnson", "Brown", "Jones", "Williams", "Miller", "Taylor", "Wilson", "Anderson", "Thomas", "Jackson", "White" };
-
-                    int lang = rand.Next(3);
-                    string first, last;
-                    if (lang == 0)
-                    {
-                        first = arabicFirst[rand.Next(arabicFirst.Length)];
-                        last = arabicLast[rand.Next(arabicLast.Length)];
-                    }
-                    else if (lang == 1)
-                    {
-                        first = turkishFirst[rand.Next(turkishFirst.Length)];
-                        last = turkishLast[rand.Next(turkishLast.Length)];
-                    }
-                    else
-                    {
-                        first = englishFirst[rand.Next(englishFirst.Length)];
-                        last = englishLast[rand.Next(englishLast.Length)];
-                    }
-
-                    string uniqueSuffix;
-                    lock (_suffixLock)
-                    {
-                        do
-                        {
-                            uniqueSuffix = new string(Enumerable.Repeat("abcdefghijklmnopqrstuvwxyz", 3)
-                                .Select(s => s[rand.Next(s.Length)]).ToArray());
-                        }
-                        while (_usedSuffixes.Contains(uniqueSuffix));
-                        _usedSuffixes.Add(uniqueSuffix);
-                    }
-
-                    string[] templates = new[]
-                    {
-            $"{first} {last}",
-            $"{first} {uniqueSuffix}",
-            $"{first} {last} {uniqueSuffix}",
-            $"{first}-{last}",
-            $"{first}_{last}",
-            $"{first} {last.Substring(0,1).ToUpper()}.",
-            $"{first} {uniqueSuffix.ToUpper()}",
-            $"{last} {first}"
-        };
-
-                    string fullName = templates[rand.Next(templates.Length)];
-
-                    string[] optionalPrefixes = { "", "", "+90 ", "+20 ", "+966 ", "Mr. ", "Ms. ", "" };
-                    fullName = optionalPrefixes[rand.Next(optionalPrefixes.Length)] + fullName;
-
-                    return fullName.Trim();
-                }
-
                 contactName = GenerateRealisticName();
-            }
-             
-            // ✅ إضافة الرقم إلى جهات الاتصال باستخدام الاسم الحقيقي
+
+            // ✅ إضافة الرقم إلى جهات الاتصال
             try
             {
                 var contactRequest = new RestRequest("/api/contacts", Method.Put);
@@ -1466,45 +1462,9 @@ namespace MarketingSpeedAPI.Controllers
             {
                 Console.WriteLine($"⚠️ Error saving contact: {ex.Message}");
             }
-            try
-            {
-                // دالة توليد عشوائية طبيعية (Box–Muller)
-                double NextGaussian()
-                {
-                    var r = Random.Shared;
-                    double u1 = 1.0 - r.NextDouble();
-                    double u2 = 1.0 - r.NextDouble();
-                    return Math.Sqrt(-2.0 * Math.Log(u1)) * Math.Sin(2.0 * Math.PI * u2);
-                }
-
-                // توزيع طبيعي مقطوع (Truncated Normal)
-                double TruncatedNormal(double mean, double stdDev, double min, double max)
-                {
-                    double val = mean + stdDev * NextGaussian();
-                    if (val < min) val = min + Random.Shared.NextDouble() * (mean - min) * 0.5;
-                    if (val > max) val = max - Random.Shared.NextDouble() * (max - mean) * 0.5;
-                    return val;
-                }
-
-                // 🔹 تأخير طبيعي بين 1200ms إلى 3500ms (≈ 1.2–3.5 ثانية)
-                double mean = 2200.0;      // متوسط طبيعي 2.2 ثانية
-                double stdDev = 600.0;     // انحراف معياري متوسط
-                double delayMs = TruncatedNormal(mean, stdDev, 1200.0, 3500.0);
-
-                // 🔹 إضافة انحراف بسيط ±300ms (جعل السلوك بشري أكثر)
-                delayMs += (Random.Shared.NextDouble() - 0.5) * 600.0;
-
-                if (delayMs < 1000.0) delayMs = 1000.0;  // لا يقل عن 1 ثانية
-                if (delayMs > 4000.0) delayMs = 4000.0;  // لا يزيد عن 4 ثوانٍ
-
-                await Task.Delay(TimeSpan.FromMilliseconds(delayMs));
-            }
-            catch (Exception ex)
-            {
-            }
 
             // ✅ تجهيز جسم الرسالة
-            var body = new Dictionary<string, object?> { { "to", req.Recipient } };
+            var body = new Dictionary<string, object?> { { "to", NormalizePhone(req.Recipient) } };
             if (req.ImageUrls != null && req.ImageUrls.Any())
             {
                 var mediaUrl = req.ImageUrls.First();
@@ -1519,48 +1479,53 @@ namespace MarketingSpeedAPI.Controllers
             if (body.Count <= 1)
                 return Ok(new { success = false, blocked = false, error = "Message body and attachments are empty" });
 
-            
-             
+            // ✅ محاكاة الكتابة فقط
             if (!string.IsNullOrEmpty(req.Message))
             {
                 try
                 {
-                    int messageLength = req.Message.Length;
- 
-                    // 🔹 إعداد القيم مع أجزاء من الثانية
-                    double meanMs = Math.Max(2000, messageLength * 80.0);  // لا يقل عن 2 ثانية
-                    double stdDev = meanMs * 0.25;
+                    bool skipComposing = rand.Next(100) < 10;
+                    bool hasImage = req.ImageUrls != null && req.ImageUrls.Any();
 
-                    double composing1 = NormalDelay(meanMs, stdDev, 2000, 6000);
-                    double pauseMs = NormalDelay(2500, 700, 800, 2000); // سكون بين 1 و 4 ثواني
-                    double composing2 = NormalDelay(meanMs, stdDev, 2000, 6000);
+                    if (skipComposing)
+                    {
+                        await Task.Delay(500);
+                    }
+                    else if (hasImage)
+                    {
+                        double composingMs = 800 + rand.Next(800);
+                        string jid = $"{NormalizePhone(req.Recipient)}@s.whatsapp.net";
+                        var composingReq = new RestRequest("/api/send-presence-update", Method.Post);
+                        composingReq.AddHeader("Authorization", $"Bearer {account.AccessToken}");
+                        composingReq.AddHeader("Content-Type", "application/json");
+                        composingReq.AddJsonBody(new { jid, type = "composing", delayMs = (int)composingMs });
+                        await _client.ExecuteAsync(composingReq);
+                        await Task.Delay(TimeSpan.FromMilliseconds(composingMs));
+                    }
+                    else
+                    {
+                        double composing1 = 3000 + rand.Next(3000);  // 3–6 ثواني
+                        double pauseMs = 1000 + rand.Next(1000);     // 1–2 ثانية
+                        double composing2 = 500 + rand.Next(1500);   // 0.5–2 ثانية
 
-                    string jid = $"{NormalizePhone(req.Recipient)}@s.whatsapp.net";
+                        string jid = $"{NormalizePhone(req.Recipient)}@s.whatsapp.net";
 
-                    // 🔸 الإشارة الأولى "composing"
-                    var composingReq1 = new RestRequest("/api/send-presence-update", Method.Post);
-                    composingReq1.AddHeader("Authorization", $"Bearer {account.AccessToken}");
-                    composingReq1.AddHeader("Content-Type", "application/json");
-                    composingReq1.AddJsonBody(new { jid, type = "composing", delayMs = (int)composing1 });
+                        var composingReq1 = new RestRequest("/api/send-presence-update", Method.Post);
+                        composingReq1.AddHeader("Authorization", $"Bearer {account.AccessToken}");
+                        composingReq1.AddHeader("Content-Type", "application/json");
+                        composingReq1.AddJsonBody(new { jid, type = "composing", delayMs = (int)composing1 });
+                        await _client.ExecuteAsync(composingReq1);
+                        await Task.Delay(TimeSpan.FromMilliseconds(composing1));
 
-                    await _client.ExecuteAsync(composingReq1);
-                    await Task.Delay(TimeSpan.FromMilliseconds(composing1)); // ⏳ الانتظار بأجزاء من الثانية
+                        await Task.Delay(TimeSpan.FromMilliseconds(pauseMs));
 
-                    // 🔸 فترة السكون بين الإشارتين
-                    await Task.Delay(TimeSpan.FromMilliseconds(pauseMs)); // ⏸️ 1–4 ثواني بأجزاء من الثانية
-
-                    // 🔸 الإشارة الثانية "composing"
-                    var composingReq2 = new RestRequest("/api/send-presence-update", Method.Post);
-                    composingReq2.AddHeader("Authorization", $"Bearer {account.AccessToken}");
-                    composingReq2.AddHeader("Content-Type", "application/json");
-                    composingReq2.AddJsonBody(new { jid, type = "composing", delayMs = (int)composing2 });
-
-                    await _client.ExecuteAsync(composingReq2);
-                    await Task.Delay(TimeSpan.FromMilliseconds(composing2)); // ⏳ الانتظار بأجزاء من الثانية
-
-                    // 🔹 بعد الكتابة الثانية، يمكن إضافة تأخير بسيط قبل الإرسال (0.5–1.5 ثانية)
-                    double finalPause = 1100 + rand.NextDouble() * 1800;
-                    await Task.Delay(TimeSpan.FromMilliseconds(finalPause));
+                        var composingReq2 = new RestRequest("/api/send-presence-update", Method.Post);
+                        composingReq2.AddHeader("Authorization", $"Bearer {account.AccessToken}");
+                        composingReq2.AddHeader("Content-Type", "application/json");
+                        composingReq2.AddJsonBody(new { jid, type = "composing", delayMs = (int)composing2 });
+                        await _client.ExecuteAsync(composingReq2);
+                        await Task.Delay(TimeSpan.FromMilliseconds(composing2));
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -1568,7 +1533,7 @@ namespace MarketingSpeedAPI.Controllers
                 }
             }
 
-            // ✅ إرسال الرسالة
+            // ✅ إرسال الرسالة مباشرة
             var sendReq = new RestRequest("/api/send-message", Method.Post);
             sendReq.AddHeader("Authorization", $"Bearer {account.AccessToken}");
             sendReq.AddHeader("Content-Type", "application/json");
@@ -1589,7 +1554,6 @@ namespace MarketingSpeedAPI.Controllers
 
                 if ((int)response.StatusCode == 429)
                 {
-                    // ✅ exponential backoff + jitter
                     int waitSec = (int)(Math.Pow(2, attempt) * 2 + Random.Shared.Next(0, 3));
                     await Task.Delay(waitSec * 1000);
                     continue;
@@ -1623,7 +1587,7 @@ namespace MarketingSpeedAPI.Controllers
                 break;
             }
 
-           
+            // ✅ حفظ في السجل
             _ = Task.Run(async () =>
             {
                 try
@@ -1635,6 +1599,9 @@ namespace MarketingSpeedAPI.Controllers
                     {
                         MessageId = (int)(req.MainMessageId ?? 0),
                         Recipient = req.Recipient,
+                        sender = senderNumber,
+                        UserId = (int)userId,
+                        body = req.Message,
                         PlatformId = account.PlatformId,
                         Status = success ? "sent" : "failed",
                         ErrorMessage = errorMessage,
@@ -1656,6 +1623,71 @@ namespace MarketingSpeedAPI.Controllers
                             });
                         }
                     }
+                    // ✅ خصم 1 من استخدام ميزة الإرسال إلى الأعضاء بعد الإرسال الناجح
+                    // ✅ خصم 1 من استخدام ميزة الإرسال للأعضاء بعد الإرسال الناجح
+                    if (success)
+                    {
+                        var activeSubs = await scopedContext.UserSubscriptions
+                            .Where(s => s.UserId == (int)userId &&
+                                        s.IsActive &&
+                                        s.PaymentStatus == "paid" &&
+                                        s.StartDate <= DateTime.UtcNow &&
+                                        s.EndDate >= DateTime.UtcNow)
+                            .OrderBy(s => s.StartDate)
+                            .ToListAsync();
+
+                        if (activeSubs.Any())
+                        {
+                            foreach (var sub in activeSubs)
+                            {
+                                // 🔹 البحث عن الميزة الخاصة بالإرسال للأعضاء (forMembers = true)
+                                var feature = await scopedContext.PackageFeatures
+                                    .FirstOrDefaultAsync(f => f.PackageId == sub.PackageId && f.forMembers == true);
+
+                                if (feature == null)
+                                    continue;
+
+                                var usage = await scopedContext.subscription_usage
+                                    .FirstOrDefaultAsync(u => u.UserId == (int)userId &&
+                                                              u.SubscriptionId == sub.Id &&
+                                                              u.FeatureId == feature.Id);
+
+                                // لو الاستخدام مش موجود نضيفه جديد
+                                if (usage == null)
+                                {
+                                    usage = new SubscriptionUsage
+                                    {
+                                        UserId = (int)userId,
+                                        SubscriptionId = sub.Id,
+                                        PackageId = sub.PackageId,
+                                        FeatureId = feature.Id,
+                                        LimitCount = feature.LimitCount,
+                                        UsedCount = 1,
+                                        LastUsedAt = DateTime.UtcNow
+                                    };
+                                    scopedContext.subscription_usage.Add(usage);
+                                    await scopedContext.SaveChangesAsync();
+                                    break; // ✅ خصمنا من أول باقة متاحة — نخرج من الحلقة
+                                }
+                                else
+                                {
+                                    // إذا الباقة فيها رصيد متبقي
+                                    int remaining = usage.LimitCount - usage.UsedCount;
+                                    if (remaining > 0)
+                                    {
+                                        usage.UsedCount += 1;
+                                        usage.LastUsedAt = DateTime.UtcNow;
+                                        scopedContext.subscription_usage.Update(usage);
+                                        await scopedContext.SaveChangesAsync();
+                                        break; // ✅ خصمنا من هذه الباقة فقط
+                                    }
+                                    // لو خلصت نكمل على الباقة اللي بعدها
+                                }
+                            }
+                        }
+                    }
+
+
 
                     await scopedContext.SaveChangesAsync();
                 }
@@ -1665,7 +1697,153 @@ namespace MarketingSpeedAPI.Controllers
                 }
             });
 
-            return Ok(new { success, blocked = isBlocked, error = errorMessage });
+            // ✅ النتيجة مع الإحصاءات اليومية
+            return Ok(new
+            {
+                success,
+                req.MainMessageId,
+                blocked = isBlocked,
+                error = errorMessage
+            });
+        }
+
+
+        // ----------------- دعم الأسماء الواقعية -----------------
+
+        private string GenerateRealisticName()
+        {
+            var rand = new Random();
+
+            string[] arabicFirst = { "زياد", "خالد", "أحمد", "سارة", "نور", "رنا", "ليلى", "عمرو", "نادر", "يوسف", "هاني", "إيمان", "منى", "فاطمة", "رامي", "حسام", "نجلاء", "مراد", "باسم", "أمل" };
+            string[] arabicLast = { "العتيبي", "الأنصاري", "الشريف", "الهاشمي", "القحطاني", "المصري", "الفاضل", "الزيدي", "الحسيني", "الخطيب", "العوضي", "المنصوري", "السيد", "الزهراني", "البغدادي" };
+
+            string[] turkishFirst = { "Ahmet", "Mehmet", "Elif", "Zeynep", "Yusuf", "Emre", "Ayşe", "Fatma", "Can", "Eren", "Selin", "Burak", "Merve", "Deniz", "Okan", "Melisa", "Seda" };
+            string[] turkishLast = { "Demir", "Kaya", "Çelik", "Şahin", "Aydın", "Yıldız", "Polat", "Arslan", "Koç", "Öztürk", "Doğan", "Yalçın", "Güneş" };
+
+            string[] englishFirst = { "Adam", "Olivia", "Noah", "Emma", "Liam", "Sophia", "James", "Ava", "Ethan", "Mia", "Daniel", "Ella", "Logan", "Isabella", "Lucas", "Chloe" };
+            string[] englishLast = { "Smith", "Johnson", "Brown", "Jones", "Williams", "Miller", "Taylor", "Wilson", "Anderson", "Thomas", "Jackson", "White" };
+
+            int lang = rand.Next(3);
+            string first, last;
+            if (lang == 0)
+            {
+                first = arabicFirst[rand.Next(arabicFirst.Length)];
+                last = arabicLast[rand.Next(arabicLast.Length)];
+            }
+            else if (lang == 1)
+            {
+                first = turkishFirst[rand.Next(turkishFirst.Length)];
+                last = turkishLast[rand.Next(turkishLast.Length)];
+            }
+            else
+            {
+                first = englishFirst[rand.Next(englishFirst.Length)];
+                last = englishLast[rand.Next(englishLast.Length)];
+            }
+
+            string uniqueSuffix;
+            lock (_suffixLock)
+            {
+                do
+                {
+                    uniqueSuffix = new string(Enumerable.Repeat("abcdefghijklmnopqrstuvwxyz", 3)
+                        .Select(s => s[rand.Next(s.Length)]).ToArray());
+                }
+                while (_usedSuffixes.Contains(uniqueSuffix));
+                _usedSuffixes.Add(uniqueSuffix);
+            }
+
+            string[] templates = new[]
+            {
+        $"{first} {last}",
+        $"{first} {uniqueSuffix}",
+        $"{first} {last} {uniqueSuffix}",
+        $"{first}-{last}",
+        $"{first}_{last}",
+        $"{first} {last.Substring(0,1).ToUpper()}.",
+        $"{first} {uniqueSuffix.ToUpper()}",
+        $"{last} {first}"
+    };
+
+            string fullName = templates[rand.Next(templates.Length)];
+            string[] optionalPrefixes = { "", "", "+90 ", "+20 ", "+966 ", "Mr. ", "Ms. ", "" };
+            fullName = optionalPrefixes[rand.Next(optionalPrefixes.Length)] + fullName;
+
+            return fullName.Trim();
+        }
+
+        [HttpGet("daily-limit/{userId}")]
+        public async Task<IActionResult> GetDailyLimit(ulong userId)
+        {
+            try
+            {
+                var account = await _context.user_accounts
+                    .FirstOrDefaultAsync(a => a.UserId == (int)userId && a.Status == "connected");
+
+                if (account == null)
+                {
+                    return Ok(new
+                    {
+                        success = false,
+                        message = "No connected account found",
+                        dailyLimit = 0,
+                        sentToday = 0,
+                        remaining = 0,
+                        dayInCycle = 0
+                    });
+                }
+
+                string senderNumber = NormalizePhone(account.AccountIdentifier);
+
+                // 🕒 أول رسالة أرسلها الحساب
+                var firstLog = await _context.message_logs
+                    .Where(m => m.sender == senderNumber)
+                    .OrderBy(m => m.AttemptedAt)
+                    .FirstOrDefaultAsync();
+
+                DateTime firstSendDate = firstLog?.AttemptedAt ?? DateTime.UtcNow;
+                int totalDays = (DateTime.UtcNow.Date - firstSendDate.Date).Days;
+                int dayInCycle = (totalDays % 30) + 1;
+
+                // 🧮 الحد اليومي بناءً على اليوم داخل الدورة
+                int dailyLimit = dayInCycle switch
+                {
+                    <= 3 => 100,
+                    <= 6 => 300,
+                    <= 9 => 500,
+                    _ => int.MaxValue // بعد اليوم التاسع مفتوح
+                };
+
+                // 📆 عدد الرسائل المرسلة اليوم (للأشخاص فقط)
+                DateTime today = DateTime.UtcNow.Date;
+                int sentToday = await _context.message_logs
+                    .CountAsync(m =>
+                        m.sender == senderNumber &&
+                        m.AttemptedAt >= today &&
+                        !m.Recipient.EndsWith("@g.us")); // ✅ استبعاد المجموعات
+
+                int remaining = (dailyLimit == int.MaxValue)
+                    ? int.MaxValue
+                    : Math.Max(0, dailyLimit - sentToday);
+
+                return Ok(new
+                {
+                    success = true,
+                    dailyLimit = (dailyLimit == int.MaxValue) ? 999999 : dailyLimit,
+                    sentToday,
+                    remaining = (remaining == int.MaxValue) ? 999999 : remaining,
+                    dayInCycle
+                });
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"⚠️ Error in GetDailyLimit: {ex.Message}");
+                return StatusCode(500, new
+                {
+                    success = false,
+                    message = "Internal Server Error"
+                });
+            }
         }
 
 
@@ -1744,6 +1922,7 @@ namespace MarketingSpeedAPI.Controllers
                 return Ok(new { success = false, message = "Invalid request" });
 
             var results = new List<object>();
+            int successCount = 0;
 
             foreach (var member in req.Members)
             {
@@ -1755,7 +1934,6 @@ namespace MarketingSpeedAPI.Controllers
                     addRequest.AddJsonBody(new { participants = new List<string> { member } });
 
                     var response = await _client.ExecuteAsync(addRequest);
-
                     bool success = response.IsSuccessful;
                     string? error = success ? null : response.Content;
 
@@ -1766,12 +1944,19 @@ namespace MarketingSpeedAPI.Controllers
                         error
                     });
 
-                    if (!success)
+                    if (success)
+                    {
+                        successCount++;
+
+                        // ✅ خصم مباشر من الاستخدام عند نجاح الإضافة
+                        await DeductUsageForCreatingGroupsAsync((int)userId);
+                    }
+                    else
                     {
                         _logger.LogWarning("Failed to add member {Member}: {Error}", member, response.Content);
                     }
 
-                    // ⏳ انتظار عشوائي بين 10 و 20 ثانية قبل إضافة العضو التالي
+                    // ⏳ انتظار عشوائي بين 10 و 20 ثانية قبل العضو التالي
                     int delaySec = Random.Shared.Next(10, 21);
                     _logger.LogInformation("Waiting {Delay} seconds before adding next member...", delaySec);
                     await Task.Delay(delaySec * 1000);
@@ -1783,7 +1968,7 @@ namespace MarketingSpeedAPI.Controllers
                 }
             }
 
-            // ✅ تحديث وقت آخر Batch بعد الانتهاء
+            // ✅ تحديث آخر وقت Batch
             try
             {
                 var sub = await _context.group_subscriptions.FirstOrDefaultAsync(g => g.GroupId == req.GroupId);
@@ -1802,10 +1987,61 @@ namespace MarketingSpeedAPI.Controllers
             return Ok(new
             {
                 success = true,
-                message = "Members processed (added one by one)",
+                message = $"Members processed (added one by one). Total successful: {successCount}",
                 results
             });
         }
+
+        /// ✅ دالة خصم الاستخدام بدقة لكل عضو ناجح
+        private async Task DeductUsageForCreatingGroupsAsync(int userId)
+        {
+            try
+            {
+                // 🧩 اجلب جميع الاشتراكات النشطة
+                var today = DateTime.UtcNow.Date;
+                var activeSubs = await _context.UserSubscriptions
+                    .Where(s => s.UserId == userId &&
+                                s.IsActive &&
+                                s.PaymentStatus == "paid" &&
+                                s.StartDate <= today &&
+                                s.EndDate >= today)
+                    .Select(s => s.Id)
+                    .ToListAsync();
+
+                if (!activeSubs.Any())
+                    return;
+
+                // 🧩 اجلب الميزة الخاصة بإنشاء المجموعات
+                var feature = await _context.PackageFeatures
+                    .Where(f => f.forCreatingGroups && f.PlatformId == 1)
+                    .Select(f => f.Id)
+                    .FirstOrDefaultAsync();
+
+                if (feature == 0)
+                    return;
+
+                // 🧩 اجلب أول usage نشط فيه باقي رصيد
+                var usage = await _context.subscription_usage
+                    .Where(u => activeSubs.Contains(u.SubscriptionId) &&
+                                u.FeatureId == feature &&
+                                u.UsedCount < u.LimitCount)
+                    .OrderBy(u => u.UsedCount)
+                    .FirstOrDefaultAsync();
+
+                if (usage != null)
+                {
+                    usage.UsedCount += 1;
+                    _context.subscription_usage.Update(usage);
+                    await _context.SaveChangesAsync();
+                    _logger.LogInformation("✅ Usage deducted for user {UserId} (UsedCount: {UsedCount})", userId, usage.UsedCount);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "❌ Error while deducting usage for user {UserId}", userId);
+            }
+        }
+
 
         // ✅ Presence: Available
         [HttpPost("presence/available/{userId}")]

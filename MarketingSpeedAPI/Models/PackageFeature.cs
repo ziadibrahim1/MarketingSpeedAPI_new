@@ -30,8 +30,10 @@ namespace MarketingSpeedAPI.Models
 
         [Column("LimitCount")]
         public int LimitCount { get; set; } = 0;
+
         [Column("sendingLimit")]
         public int sendingLimit { get; set; } = 0;
+
         [Column("PlatformId")]
         public int PlatformId { get; set; }
 
@@ -40,8 +42,12 @@ namespace MarketingSpeedAPI.Models
 
         [Column("forMembers")]
         public bool forMembers { get; set; }=false;
+
         [Column("forCreatingGroups")]
         public bool forCreatingGroups { get; set; }=false;
+
+        [Column("forGetingGruops")]
+        public bool forGetingGruops { get; set; }=false;
 
 
         [Column("created_at")]

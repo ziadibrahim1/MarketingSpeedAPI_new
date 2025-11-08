@@ -62,57 +62,126 @@ namespace MarketingSpeedAPI.Controllers
         [HttpGet("{CategoryID}/{CountryID}/{userId}")]
         public async Task<IActionResult> GetGroups(ulong userId, int CategoryID, int CountryID)
         {
-            var today = DateTime.UtcNow.Date;
+            var now = DateTime.UtcNow;
+            var today = now.Date;
+            var oneHourAgo = now.AddHours(-1);
 
-            var maxLimit = await _context.UserSubscriptions
+            // 🔹 الاشتراكات النشطة
+            var activeSubs = await _context.UserSubscriptions
                 .Where(s => s.UserId == (int)userId &&
                             s.IsActive &&
                             s.PaymentStatus == "paid" &&
                             s.StartDate <= today &&
                             s.EndDate >= today)
-                .SumAsync(s => (int?)s.Add_groups_limit);
+                .Select(s => s.Id)
+                .ToListAsync();
 
-            int addGroupsLimit = maxLimit ?? 0;
+            // 🔹 الميزة الخاصة بالحصول على المجموعات
+            var usageFeatureId = await _context.PackageFeatures
+                .Where(f => f.forGetingGruops && f.PlatformId == 1)
+                .Select(f => f.Id)
+                .FirstOrDefaultAsync();
 
+            // 🔹 قراءة الاستخدام من subscription_usage
+            var usage = await _context.subscription_usage
+                .Where(u => activeSubs.Contains(u.SubscriptionId) && u.FeatureId == usageFeatureId)
+                .ToListAsync();
+
+            int totalLimit = usage.Sum(u => u.LimitCount);
+            int usedCount = usage.Sum(u => u.UsedCount);
+            int remaining = Math.Max(totalLimit - usedCount, 0);
+
+            // 🔹 حساب المجموعات التي انضم إليها المستخدم في الساعة الماضية
+            int joinedLastHour = await _context.user_joined_groups
+                .CountAsync(j => j.user_id == (int)userId && j.joined_at >= oneHourAgo && j.is_active);
+
+            int hourlyLimit = 20; // لا يزيد عن 20 في الساعة
+            int remainingThisHour = Math.Max(hourlyLimit - joinedLastHour, 0);
+
+            // 🔹 استبعاد المجموعات المنضم إليها مسبقًا
             var joinedInviteCodes = await _context.user_joined_groups
                 .Where(j => j.user_id == (int)userId && j.is_active)
                 .Select(j => "https://chat.whatsapp.com/" + j.group_invite_code)
                 .ToListAsync();
 
+            // 🔹 جلب المجموعات
             var groups = await _context.company_groups
-             .Where(g => g.IsActive
-                         && !g.IsHidden
-                         && g.CountryId == CountryID
-                         && g.CategoryId == CategoryID
-                         && !joinedInviteCodes.Contains(g.InviteLink))
-             .Include(g => g.OurGroupsCountry)
-             .Include(g => g.OurGroupsCategory)
-             .Select(g => new CompanyGroup
-             {
-                 Id = g.Id,
-                 GroupName = g.GroupName,
-                 InviteLink = g.InviteLink,
-                 Description = g.Description,
-                 Price = g.Price,
-                 IsActive = g.IsActive,
-                 IsHidden = g.IsHidden,
-                 SendingStatus = g.SendingStatus,
-                 CountryNameAr = g.OurGroupsCountry != null ? g.OurGroupsCountry.NameAr : "",
-                 CountryNameEn = g.OurGroupsCountry != null ? g.OurGroupsCountry.NameEn : "",
-                 CategoryNameAr = g.OurGroupsCategory != null ? g.OurGroupsCategory.NameAr : "",
-                 CategoryNameEn = g.OurGroupsCategory != null ? g.OurGroupsCategory.NameEn : ""
-             })
-             .ToListAsync();
+                .Where(g => g.IsActive
+                            && !g.IsHidden
+                            && g.CountryId == CountryID
+                            && g.CategoryId == CategoryID
+                            && !joinedInviteCodes.Contains(g.InviteLink))
+                .Include(g => g.OurGroupsCountry)
+                .Include(g => g.OurGroupsCategory)
+                .Select(g => new CompanyGroup
+                {
+                    Id = g.Id,
+                    GroupName = g.GroupName,
+                    InviteLink = g.InviteLink,
+                    Description = g.Description,
+                    Price = g.Price,
+                    IsActive = g.IsActive,
+                    IsHidden = g.IsHidden,
+                    SendingStatus = g.SendingStatus,
+                    CountryNameAr = g.OurGroupsCountry != null ? g.OurGroupsCountry.NameAr : "",
+                    CountryNameEn = g.OurGroupsCountry != null ? g.OurGroupsCountry.NameEn : "",
+                    CategoryNameAr = g.OurGroupsCategory != null ? g.OurGroupsCategory.NameAr : "",
+                    CategoryNameEn = g.OurGroupsCategory != null ? g.OurGroupsCategory.NameEn : ""
+                })
+                .ToListAsync();
 
-
-
-            return Ok(new GroupListResponse
+            // 🔹 النتيجة النهائية
+            return Ok(new
             {
-                Limit = addGroupsLimit,
-                Groups = groups
+                success = true,
+                message = "Groups and usage fetched successfully",
+                totalLimit,
+                usedCount,
+                remaining,
+                hourlyLimit,
+                joinedLastHour,
+                remainingThisHour,
+                groups
             });
         }
 
+        [HttpPost("update-usage/{userId}")]
+        public async Task<IActionResult> UpdateUsage(int userId, [FromBody] UpdateUsageDto model)
+        {
+            var subs = await _context.UserSubscriptions
+                .Where(s => s.UserId == userId && s.IsActive && s.PaymentStatus == "paid")
+                .Select(s => s.Id)
+                .ToListAsync();
+
+            var featureId = await _context.PackageFeatures
+                .Where(f => f.forGetingGruops)
+                .Select(f => f.Id)
+                .FirstOrDefaultAsync();
+
+            var usages = await _context.subscription_usage
+                .Where(u => subs.Contains(u.SubscriptionId) && u.FeatureId == featureId)
+                .ToListAsync();
+
+            // 👇 يخصم الاستخدام بالترتيب من الباقات حتى يستهلك العدد المطلوب
+            int remainingToDeduct = model.used;
+            foreach (var usage in usages)
+            {
+                var available = usage.LimitCount - usage.UsedCount;
+                if (available <= 0) continue;
+
+                int deduct = Math.Min(remainingToDeduct, available);
+                usage.UsedCount += deduct;
+                remainingToDeduct -= deduct;
+
+                if (remainingToDeduct <= 0)
+                    break;
+            }
+
+            await _context.SaveChangesAsync();
+            return Ok(new { success = true });
+        }
+
+       
 
 
         [HttpGet("group-size/{inviteCode}/{userId}")]
@@ -159,11 +228,33 @@ namespace MarketingSpeedAPI.Controllers
             }
         }
 
+
+
+
         [HttpPost("accept-invite/{userId}")]
         public async Task<IActionResult> AcceptInvite(ulong userId, [FromBody] InviteRequest req)
         {
-            var today = DateTime.UtcNow.Date;
+            var now = DateTime.UtcNow;
 
+            // ✅ التحقق من عدد المجموعات التي انضم إليها المستخدم خلال آخر ساعة
+            var oneHourAgo = now.AddHours(-1);
+            int joinedCountLastHour = await _context.user_joined_groups
+                .Where(g => g.user_id == (int)userId && g.joined_at >= oneHourAgo)
+                .CountAsync();
+
+            if (joinedCountLastHour > 21)
+            {
+                return Ok(new
+                {
+                    success = false,
+                    status = "limit_reached",
+                    message = "لقد وصلت للحد الأقصى للانضمام (20 مجموعة خلال ساعة). يرجى المحاولة لاحقاً."
+                });
+            }
+
+            var today = now.Date;
+
+            // ✅ 1) التحقق من الاشتراك
             var subscription = await _context.UserSubscriptions
                 .Where(s => s.UserId == (int)userId &&
                             s.IsActive &&
@@ -177,6 +268,7 @@ namespace MarketingSpeedAPI.Controllers
             if (subscription == null)
                 return Ok(new { success = false, status = "0", message = "Subscription invalid" });
 
+            // ✅ 2) التحقق من الحساب المتصل
             var account = await _context.user_accounts
                 .FirstOrDefaultAsync(a => a.UserId == (int)userId && a.PlatformId == 1 && a.Status == "connected");
 
@@ -186,7 +278,7 @@ namespace MarketingSpeedAPI.Controllers
             if (string.IsNullOrWhiteSpace(req.Code))
                 return BadRequest(new { success = false, message = "Invite code is required" });
 
-            // ✅ 1) جلب بيانات المجموعة من رابط الدعوة
+            // ✅ 3) جلب بيانات المجموعة من رابط الدعوة
             var inviteRequest = new RestRequest($"/api/groups/invite/{req.Code}", Method.Get);
             inviteRequest.AddHeader("Authorization", $"Bearer {account.AccessToken}");
             var inviteResp = await _client.ExecuteAsync(inviteRequest);
@@ -209,7 +301,7 @@ namespace MarketingSpeedAPI.Controllers
                 return BadRequest(new { success = false, message = "Invalid invite code response" });
             }
 
-            // ✅ 2) جلب المجموعات الحالية للمستخدم
+            // ✅ 4) التحقق من المجموعات الحالية للمستخدم
             var groupsRequest = new RestRequest("/api/groups", Method.Get);
             groupsRequest.AddHeader("Authorization", $"Bearer {account.AccessToken}");
             var groupsResp = await _client.ExecuteAsync(groupsRequest);
@@ -219,9 +311,9 @@ namespace MarketingSpeedAPI.Controllers
             var groupsJson = JObject.Parse(groupsResp.Content);
             var existingGroups = groupsJson["data"]?.ToObject<List<JObject>>() ?? new List<JObject>();
 
-            // ✅ 3) تحقق هل المستخدم بالفعل عضو في نفس المجموعة
             bool alreadyMember = existingGroups.Any(g =>
                 string.Equals(g["id"]?.ToString(), inviteGroupId, StringComparison.OrdinalIgnoreCase));
+
             if (alreadyMember)
             {
                 return Ok(new
@@ -233,7 +325,7 @@ namespace MarketingSpeedAPI.Controllers
                 });
             }
 
-            // ✅ 4) الانضمام للمجموعة فعليًا
+            // ✅ 5) الانضمام للمجموعة فعليًا
             var joinRequest = new RestRequest("/api/groups/invite/accept", Method.Post);
             joinRequest.AddHeader("Authorization", $"Bearer {account.AccessToken}");
             joinRequest.AddHeader("Content-Type", "application/json");
@@ -305,12 +397,10 @@ namespace MarketingSpeedAPI.Controllers
                 {
                     success = true,
                     message = "Invite accepted",
-                    rawResponse = response.Content,
-                    remainingLimit = subscription.Add_groups_limit
+                    rawResponse = response.Content
                 });
             }
         }
-
 
 
         [HttpPost("leave-group/{userId}")]

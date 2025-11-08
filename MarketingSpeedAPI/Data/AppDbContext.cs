@@ -130,6 +130,26 @@ namespace MarketingSpeedAPI.Data
                 entity.Property(e => e.joined_at).IsRequired();
                 entity.Property(e => e.is_active).IsRequired().HasDefaultValue(true);
             });
+
+            modelBuilder.Entity<SubscriptionUsage>()
+                .HasOne(u => u.Feature)
+                .WithMany()
+                .HasForeignKey(u => u.FeatureId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            
+            modelBuilder.Entity<SubscriptionUsage>()
+                .HasOne(u => u.Package)
+                .WithMany()
+                .HasForeignKey(u => u.PackageId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<SubscriptionUsage>()
+                .HasOne(u => u.User)
+                .WithMany()
+                .HasForeignKey(u => u.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+
         }
 
     }

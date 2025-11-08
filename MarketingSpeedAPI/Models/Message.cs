@@ -31,9 +31,13 @@
         public int MessageId { get; set; }
         public Message Message { get; set; } = null!;
         public string Recipient { get; set; } = string.Empty;
+        public string sender { get; set; } = string.Empty;
+        public string body { get; set; } = string.Empty;
         public int PlatformId { get; set; }
         public string Status { get; set; } = "pending"; // pending | sent | failed
         public string? ErrorMessage { get; set; }
+        public int UserId { get; set; } // 🔹 لتحديد صاحب الرسالة
+
         public bool toGroupMember { get; set; } = false;
         public DateTime AttemptedAt { get; set; } = DateTime.UtcNow;
 

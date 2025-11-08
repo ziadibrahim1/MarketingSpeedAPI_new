@@ -14,6 +14,61 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Content Remove="wwwroot\uploads\001837f3-8052-4dd8-85a7-50c9f45afbb9.jpg" />
+    <Content Remove="wwwroot\uploads\077b193c-77bd-432a-af39-2f34a6b36034.jpg" />
+    <Content Remove="wwwroot\uploads\0cb20558-49a4-4979-85e6-35e3e151760e.jpg" />
+    <Content Remove="wwwroot\uploads\0df38da2-8c0f-44d2-b37e-acd6fa6a1bf9.jpg" />
+    <Content Remove="wwwroot\uploads\102f95e2-dd6d-40f6-a982-14f022b5cb75.jpg" />
+    <Content Remove="wwwroot\uploads\22b73d17-30f2-4c60-a24f-c7aef216ad79.jpg" />
+    <Content Remove="wwwroot\uploads\22e7edec-eec6-4e9b-93b5-9f7979af9816.jpg" />
+    <Content Remove="wwwroot\uploads\34c327dd-5a96-4261-bb22-2729e2cd7f21.jpg" />
+    <Content Remove="wwwroot\uploads\3ce7ddee-6558-4fc4-a556-450a0a1df0d6.jpg" />
+    <Content Remove="wwwroot\uploads\3da1b3fb-4fa8-4ebe-ac4e-adcb01894e0e.jpeg" />
+    <Content Remove="wwwroot\uploads\3f7b1401-3818-4e8a-8cf5-1ed913f3496d.jpg" />
+    <Content Remove="wwwroot\uploads\400dc1f0-3b05-4d60-a914-0358f1b08512.jpg" />
+    <Content Remove="wwwroot\uploads\403f29b2-a9e3-4bdd-a13c-9ca212d48a8d.jpg" />
+    <Content Remove="wwwroot\uploads\40711733-416a-446e-a96e-1ae6939d9692.jpg" />
+    <Content Remove="wwwroot\uploads\4fc7a763-afe1-42bf-b722-fba3b98183ed.jpg" />
+    <Content Remove="wwwroot\uploads\500832d9-6aad-4af2-9829-bf7f1ed8f20a.jpg" />
+    <Content Remove="wwwroot\uploads\57f56b57-416a-402a-a898-777a6a7d4d16.jpg" />
+    <Content Remove="wwwroot\uploads\5a7a3753-6c3c-496e-973c-7436d81ba607.jpg" />
+    <Content Remove="wwwroot\uploads\5add1413-3157-419c-975d-2c9a83941b9f.jpg" />
+    <Content Remove="wwwroot\uploads\5dba33ee-63d3-4d0c-a92e-ccb45c7e8224.jpg" />
+    <Content Remove="wwwroot\uploads\6739ae8d-cb25-44c2-8acf-3c3a10b9518c.jpg" />
+    <Content Remove="wwwroot\uploads\6adc3fe5-1530-4893-9397-b0bb12e62ec1.jpg" />
+    <Content Remove="wwwroot\uploads\6ae00554-bfca-4fdf-9066-86725a337a73.jpg" />
+    <Content Remove="wwwroot\uploads\6b8afa22-85d5-4032-a270-9c6de8837b72.jpg" />
+    <Content Remove="wwwroot\uploads\6d529697-46f0-4b5b-a9d6-4608df040cce.jpg" />
+    <Content Remove="wwwroot\uploads\6ee4119b-12ea-40a1-be35-79470ef18d2b.jpg" />
+    <Content Remove="wwwroot\uploads\6f03cc62-27ab-40f8-b2f8-ee63a2810dcf.jpg" />
+    <Content Remove="wwwroot\uploads\7b17aae1-b128-4a27-b20b-91e377238d0a.jpg" />
+    <Content Remove="wwwroot\uploads\810aa24e-13d9-4276-9d1a-d736006ecd41.jpg" />
+    <Content Remove="wwwroot\uploads\89847f99-ede4-4497-bae4-2c68311d5e97.jpg" />
+    <Content Remove="wwwroot\uploads\8d2ae60d-11d6-4692-b339-e28b040cff9d.jpg" />
+    <Content Remove="wwwroot\uploads\951df348-2e49-4805-8768-2ea0c5b1e028.jpg" />
+    <Content Remove="wwwroot\uploads\9ebc4075-3c95-4e38-ae6a-747c7004ff5f.jpg" />
+    <Content Remove="wwwroot\uploads\aca50f46-42c1-4ac4-926b-a6df3c22561b.jpg" />
+    <Content Remove="wwwroot\uploads\acfe480e-1274-4985-a08d-ae5a8361a78c.jpg" />
+    <Content Remove="wwwroot\uploads\bde0a3f7-e8da-4a8c-a7a0-231895892241.jpg" />
+    <Content Remove="wwwroot\uploads\c1999e91-7b24-4732-aa3a-b6fb1d114dd6.jpg" />
+    <Content Remove="wwwroot\uploads\c5e4b376-4333-41a2-a016-6f12900dced7.jpg" />
+    <Content Remove="wwwroot\uploads\ca147976-10c6-44e7-b2eb-f6f9ca5a80c6.jpg" />
+    <Content Remove="wwwroot\uploads\d2a1d0de-4a31-429b-99da-eaff73e73856.jpg" />
+    <Content Remove="wwwroot\uploads\d6920ac9-71ee-4829-a7e7-959ff40b1cf6.jpg" />
+    <Content Remove="wwwroot\uploads\e3f3a9b2-2e68-4db6-a807-2998f521d5cd.jpg" />
+    <Content Remove="wwwroot\uploads\e44eecca-694a-4655-b448-3d141492782f.jpg" />
+    <Content Remove="wwwroot\uploads\eaf9ce03-4456-4c4a-98fe-bb77230205cd.jpg" />
+    <Content Remove="wwwroot\uploads\eb9cd23f-ef29-4c30-9a49-33633f054cb0.jpg" />
+    <Content Remove="wwwroot\uploads\f1361d5e-6855-4c2c-b8bf-839e5906ecae.jpg" />
+    <Content Remove="wwwroot\uploads\f1c654d9-3a81-4e78-8083-6a0f7a869e2f.jpg" />
+    <Content Remove="wwwroot\uploads\f55fef91-010f-42ef-bf8f-b67b242b1330.jpg" />
+    <Content Remove="wwwroot\uploads\f885deff-8e0a-4bf6-9f6f-ef58b28fb6f0.jpg" />
+    <Content Remove="wwwroot\uploads\fb4e9cd7-d95e-4653-9394-e2c4f695313a.jpg" />
+    <Content Remove="wwwroot\uploads\fcf17bc9-09c1-4213-adea-478acae72e43.jpg" />
+    <Content Remove="wwwroot\uploads\ff24382f-5286-419d-8a95-5687b0ee0213.jpg" />
+  </ItemGroup>
+
+  <ItemGroup>
     <None Remove="tdjson.dll" />
   </ItemGroup>
 

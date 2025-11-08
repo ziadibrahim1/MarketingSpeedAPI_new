@@ -26,13 +26,40 @@ namespace MarketingSpeedAPI.Controllers
 
 
         [HttpGet]
-        public async Task<IActionResult> GetMessages()
+        public async Task<IActionResult> GetMessagesByBody()
         {
-            var messages = await _context.Messages
-                .OrderByDescending(m => m.CreatedAt)
+            var logs = await _context.message_logs
+                .Where(l => l.Status == "sent")
+                .Select(l => new
+                {
+                    Body = l.body ?? "",                // 👈 هنا بنمنع NULL يوصل للـ reader
+                    AttemptedAt = l.AttemptedAt
+                })
+                .AsNoTracking()
                 .ToListAsync();
 
-            return Ok(messages);
+            if (logs.Count == 0)
+                return Content("[]", "application/json");
+
+            var grouped = logs
+                .GroupBy(l => l.Body.Trim())
+                .Select(g => new
+                {
+                    body = g.Key,
+                    count = g.Count(),
+                    lastSent = g.Max(x => x.AttemptedAt)
+                })
+                .OrderByDescending(g => g.lastSent)
+                .ToList();
+
+            var json = System.Text.Json.JsonSerializer.Serialize(grouped,
+                new System.Text.Json.JsonSerializerOptions
+                {
+                    WriteIndented = true,
+                    PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase
+                });
+
+            return Content(json, "application/json");
         }
 
         // GET: api/messages/{id}
@@ -44,17 +71,35 @@ namespace MarketingSpeedAPI.Controllers
             return Ok(msg);
         }
 
-        // DELETE: api/messages/{id}
-        [HttpDelete("{id}")]
-        public async Task<IActionResult> DeleteMessage(int id)
+        // DELETE: api/sentMessages/{body}
+        [HttpDelete("{body}")]
+        public async Task<IActionResult> DeleteMessagesByBody(string body)
         {
-            var msg = await _context.Messages.FindAsync(id);
-            if (msg == null) return NotFound();
+            if (string.IsNullOrWhiteSpace(body))
+                return BadRequest(new { message = "Invalid message body" });
 
-            _context.Messages.Remove(msg);
+            var normalizedBody = body.Trim();
+
+            var logs = await _context.message_logs
+                .Where(l => l.body == normalizedBody && l.Status != "deleted")
+                .ToListAsync();
+
+            if (!logs.Any())
+                return NotFound(new { message = "No messages found with this body" });
+
+            // 🔹 نحدث الحالة بدل الحذف الفعلي
+            foreach (var log in logs)
+            {
+                log.Status = "deleted";
+            }
+
             await _context.SaveChangesAsync();
 
-            return NoContent();
+            return Ok(new
+            {
+                message = $"Marked {logs.Count} messages as deleted.",
+                count = logs.Count
+            });
         }
 
         [HttpPost("resend/{id}")]
@@ -238,25 +283,35 @@ namespace MarketingSpeedAPI.Controllers
         [HttpGet("user/{userId}/whatsapp-stats")]
         public async Task<IActionResult> GetUserWhatsappStats(long userId)
         {
-            var since = DateTime.UtcNow.AddHours(-24);
+           
+            var tz = TimeZoneInfo.FindSystemTimeZoneById("Arab Standard Time");
+            var nowLocal = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, tz);
+            var startOfDay = new DateTime(nowLocal.Year, nowLocal.Month, nowLocal.Day, 0, 0, 0);
+            var endOfDay = startOfDay.AddDays(1);
 
-            var query = from m in _context.Messages
-                        join l in _context.message_logs on m.Id equals l.MessageId
-                        where m.UserId == userId && m.PlatformId == 1  
-                              && l.Status == "sent"
-                              && l.AttemptedAt >= since
-                        select new { l.Recipient };
+            // 🔹 نحولهم إلى UTC حتى يتطابقوا مع البيانات المخزنة في قاعدة البيانات
+            var startUtc = TimeZoneInfo.ConvertTimeToUtc(startOfDay.AddHours(3), tz);
+            var endUtc = TimeZoneInfo.ConvertTimeToUtc(endOfDay.AddHours(3), tz);
 
-            var logs = await query.ToListAsync();
+            // 🔹 نأتي بالرسائل المرسلة خلال هذا اليوم فقط
+            var logs = await _context.message_logs
+                .Where(l => l.Status == "sent"
+                            && l.PlatformId == 1
+                            && l.UserId == userId
+                            && l.AttemptedAt >= startUtc
+                            && l.AttemptedAt < endUtc)
+                .Select(l => l.Recipient)
+                .ToListAsync();
 
-            var numbersCount = logs.Count(l => !l.Recipient.Contains("@g.us"));
-
-            var groupsCount = logs.Count(l => l.Recipient.Contains("@g.us"));
+            // 🔹 عدّ الأرقام العادية والمجموعات
+            var numbersCount = logs.Count(r => !r.Contains("@g.us"));
+            var groupsCount = logs.Count(r => r.Contains("@g.us"));
 
             return Ok(new
             {
                 numbersCount,
-                groupsCount
+                groupsCount,
+                total = numbersCount + groupsCount
             });
         }
 
@@ -266,30 +321,41 @@ namespace MarketingSpeedAPI.Controllers
         {
             var now = DateTime.UtcNow.Date;
 
-            var logs = await (from m in _context.Messages
-                              join l in _context.message_logs on m.Id equals l.MessageId
-                              where m.UserId == userId && l.Status == "sent"
-                              select l.AttemptedAt)
-                             .ToListAsync();
+            // ✅ نعتمد فقط على message_logs
+            var logs = await _context.message_logs
+                .Where(l => l.UserId == userId && l.Status == "sent")
+                .Select(l => l.AttemptedAt)
+                .ToListAsync();
 
             if (range == "day")
             {
-                
-                var last7Days = Enumerable.Range(0, 7).Select(i => now.AddDays(-6 + i)).ToList();
+                // 🔹 نحدد بداية الأسبوع (السبت) ونهايته (الجمعة)
+                var today = DateTime.UtcNow.Date;
+                int daysSinceSaturday = ((int)today.DayOfWeek + 1) % 7; // السبت = 0
+                var startOfWeek = today.AddDays(-daysSinceSaturday);
+                var endOfWeek = startOfWeek.AddDays(6);
 
+                // 🔹 نجهز الأيام من السبت إلى الجمعة
+                var weekDays = Enumerable.Range(0, 7).Select(i => startOfWeek.AddDays(i)).ToList();
+
+                // 🔹 نجهز البيانات من الـ logs
                 var grouped = logs
-                    .Where(d => d >= last7Days.First())
+                    .Where(d => d.Date >= startOfWeek && d.Date <= endOfWeek)
                     .GroupBy(d => d.Date)
                     .ToDictionary(g => g.Key, g => g.Count());
 
-                var result = last7Days
-                    .Select(d => new {
-                        Period = d.ToString("yyyy-MM-dd"),  
+                // 🔹 نجهز النتيجة بنفس الصيغة
+                var result = weekDays
+                    .Select(d => new
+                    {
+                        Period = d.ToString("yyyy-MM-dd"),
                         Count = grouped.ContainsKey(d) ? grouped[d] : 0
                     })
                     .ToList();
+
                 return Ok(result);
             }
+
             else if (range == "week")
             {
                 var calendar = System.Globalization.CultureInfo.InvariantCulture.Calendar;
@@ -297,7 +363,6 @@ namespace MarketingSpeedAPI.Controllers
                 var dayOfWeek = DayOfWeek.Saturday;
 
                 var now1 = DateTime.UtcNow.Date;
-
                 var startOfMonth = new DateTime(now1.Year, now1.Month, 1);
 
                 var grouped = logs
@@ -306,11 +371,8 @@ namespace MarketingSpeedAPI.Controllers
                     .ToDictionary(g => g.Key, g => g.Count());
 
                 var result = new List<object>();
-
                 var currentWeek = calendar.GetWeekOfYear(now1, weekRule, dayOfWeek);
-
                 var firstWeekOfMonth = calendar.GetWeekOfYear(startOfMonth, weekRule, dayOfWeek);
-
                 var totalWeeksInMonth = currentWeek - firstWeekOfMonth + 1;
 
                 for (int i = 0; i < totalWeeksInMonth; i++)
@@ -330,7 +392,7 @@ namespace MarketingSpeedAPI.Controllers
             }
             else // month
             {
-                var months = Enumerable.Range(1, 12).ToList(); // 01..12
+                var months = Enumerable.Range(1, 12).ToList();
                 var grouped = logs
                     .Where(d => d.Year == now.Year)
                     .GroupBy(d => d.Month)
@@ -338,7 +400,7 @@ namespace MarketingSpeedAPI.Controllers
 
                 var result = months
                     .Select(m => new {
-                        Period = m.ToString("00"), // 01..12
+                        Period = m.ToString("00"),
                         Count = grouped.ContainsKey(m) ? grouped[m] : 0
                     })
                     .ToList();

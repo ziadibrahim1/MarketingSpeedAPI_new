@@ -3,42 +3,48 @@ using System.ComponentModel.DataAnnotations.Schema;
 
 namespace MarketingSpeedAPI.Models
 {
-    [Table("subscription_usage")]
     public class SubscriptionUsage
     {
         [Key]
-        [Column("Id")]
-        public int Id { get; set; }
+        public long Id { get; set; }
 
-        [Column("UserId")]
         public int UserId { get; set; }
 
-        [Column("SubscriptionId")]
+        // ✅ مطابق للجدول
         public int SubscriptionId { get; set; }
 
+        // ✅ مطابق للجدول
+        public int PackageId { get; set; }
+
+        // ✅ مطابق للجدول
+        public int FeatureId { get; set; }
+
+        public int UsedCount { get; set; }
+        public int LimitCount { get; set; }
+
+        [DatabaseGenerated(DatabaseGeneratedOption.Computed)]
+        public int RemainingCount { get; set; }
+
+        public DateTime? LastUsedAt { get; set; }
+        public DateTime CreatedAt { get; set; }
+        public DateTime UpdatedAt { get; set; }
+
+        // ✅ العلاقات (تحديد ForeignKey صريح)
         [ForeignKey("SubscriptionId")]
-        public UserSubscription Subscription { get; set; } = null!;
+        public UserSubscription UserSubscription { get; set; }
 
-        [Column("Channel")] // whatsapp, telegram, facebook, etc.
-        public string Channel { get; set; } = string.Empty;
+        [ForeignKey("FeatureId")]
+        public PackageFeature Feature { get; set; }
 
-        [Column("SubChannel")] // whatsapp, telegram, facebook, etc.
-        public string SubChannel { get; set; } = string.Empty;
+        [ForeignKey("UserId")]
+        public User User { get; set; }
 
-        [Column("ActionType")] // message, post, media, scheduled
-        public string ActionType { get; set; } = string.Empty;
-
-        [Column("MessageCount")]
-        public int MessageCount { get; set; } = 0;
-
-        [Column("featureId")]
-        public int featureId { get; set; }
-
-        [Column("MediaCount")]
-        public int MediaCount { get; set; } = 0;
-
-        [Column("CreatedAt")]
-        public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+        [ForeignKey("PackageId")]
+        public Package Package { get; set; }
     }
-
+    public class UpdateUsageDto
+    {
+        public int used { get; set; }
+        public string featureKey { get; set; }
+    }
 }
