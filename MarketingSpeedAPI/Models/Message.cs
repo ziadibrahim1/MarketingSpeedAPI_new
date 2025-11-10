@@ -11,8 +11,8 @@
         public int Id { get; set; }
         public int PlatformId { get; set; }
         public long UserId { get; set; }
-        public string Title { get; set; } = string.Empty;
-        public string Body { get; set; } = string.Empty;
+        public string? Title { get; set; }
+        public string? Body { get; set; }
         public string? Targets { get; set; } // JSON string of recipients
         public string? Suggestions { get; set; } // JSON string
         public string? Attachments { get; set; } // JSON array
@@ -29,16 +29,16 @@
     {
         public int Id { get; set; }
         public int MessageId { get; set; }
-        public Message Message { get; set; } = null!;
-        public string Recipient { get; set; } = string.Empty;
-        public string sender { get; set; } = string.Empty;
-        public string body { get; set; } = string.Empty;
+        public Message? Message { get; set; } 
+        public string? Recipient { get; set; }  
+        public string? sender { get; set; } 
+        public string? body { get; set; } 
         public int PlatformId { get; set; }
         public string Status { get; set; } = "pending"; // pending | sent | failed
         public string? ErrorMessage { get; set; }
         public int UserId { get; set; } // 🔹 لتحديد صاحب الرسالة
 
-        public bool toGroupMember { get; set; } = false;
+        public bool? toGroupMember { get; set; } = false;
         public DateTime AttemptedAt { get; set; } = DateTime.UtcNow;
 
 

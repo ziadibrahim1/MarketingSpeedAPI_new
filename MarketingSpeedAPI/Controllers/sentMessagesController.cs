@@ -78,16 +78,21 @@ namespace MarketingSpeedAPI.Controllers
             if (string.IsNullOrWhiteSpace(body))
                 return BadRequest(new { message = "Invalid message body" });
 
-            var normalizedBody = body.Trim();
+            var normalizedBody = (body ?? "").Trim();
 
-            var logs = await _context.message_logs
-                .Where(l => l.body == normalizedBody && l.Status != "deleted")
-                .ToListAsync();
+            // ✅ تحميل السجلات بدون شرط على body داخل SQL
+            var logsRaw = await _context.message_logs
+     .Where(l => l.Status != "deleted" && EF.Property<string>(l, "body") != null)
+     .ToListAsync();
+
+            // ✅ فلترة null داخل الذاكرة (آمن)
+            var logs = logsRaw
+                .Where(l => l.body != null && l.body.Trim() == normalizedBody)
+                .ToList();
 
             if (!logs.Any())
                 return NotFound(new { message = "No messages found with this body" });
 
-            // 🔹 نحدث الحالة بدل الحذف الفعلي
             foreach (var log in logs)
             {
                 log.Status = "deleted";

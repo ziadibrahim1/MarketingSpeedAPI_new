@@ -787,8 +787,12 @@ namespace MarketingSpeedAPI.Controllers
             {
                 foreach (var m in members.EnumerateArray())
                 {
+                    string phoneNumber = null;
                     var id = m.GetProperty("id").GetString();
-                    var phoneNumber = m.GetProperty("phoneNumber").GetString();
+                    if (m.TryGetProperty("jid", out var jidProp))
+                        phoneNumber = jidProp.GetString();
+                    else if (m.TryGetProperty("phoneNumber", out var phoneProp))
+                        phoneNumber = phoneProp.GetString();
                     var admin = m.TryGetProperty("admin", out var adminProp) && adminProp.ValueKind != JsonValueKind.Null
                                 ? adminProp.GetString()
                                 : null;
@@ -1898,6 +1902,7 @@ namespace MarketingSpeedAPI.Controllers
                 };
                 _context.group_subscriptions.Add(sub);
                 await _context.SaveChangesAsync();
+                await DeductUsageForCreatingGroupsAsync((int)userId, 2);
             }
 
             return Ok(new
@@ -1949,21 +1954,18 @@ namespace MarketingSpeedAPI.Controllers
                         successCount++;
 
                         // ✅ خصم مباشر من الاستخدام عند نجاح الإضافة
-                        await DeductUsageForCreatingGroupsAsync((int)userId);
+                        await DeductUsageForCreatingGroupsAsync((int)userId,1);
                     }
                     else
                     {
-                        _logger.LogWarning("Failed to add member {Member}: {Error}", member, response.Content);
                     }
 
                     // ⏳ انتظار عشوائي بين 10 و 20 ثانية قبل العضو التالي
                     int delaySec = Random.Shared.Next(10, 21);
-                    _logger.LogInformation("Waiting {Delay} seconds before adding next member...", delaySec);
                     await Task.Delay(delaySec * 1000);
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "Error while adding member {Member}", member);
                     results.Add(new { member, success = false, error = ex.Message });
                 }
             }
@@ -1981,7 +1983,6 @@ namespace MarketingSpeedAPI.Controllers
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error while updating LastBatchTime for group {GroupId}", req.GroupId);
             }
 
             return Ok(new
@@ -1993,7 +1994,7 @@ namespace MarketingSpeedAPI.Controllers
         }
 
         /// ✅ دالة خصم الاستخدام بدقة لكل عضو ناجح
-        private async Task DeductUsageForCreatingGroupsAsync(int userId)
+        private async Task DeductUsageForCreatingGroupsAsync(int userId, int count)
         {
             try
             {
@@ -2030,15 +2031,13 @@ namespace MarketingSpeedAPI.Controllers
 
                 if (usage != null)
                 {
-                    usage.UsedCount += 1;
+                    usage.UsedCount += count;
                     _context.subscription_usage.Update(usage);
                     await _context.SaveChangesAsync();
-                    _logger.LogInformation("✅ Usage deducted for user {UserId} (UsedCount: {UsedCount})", userId, usage.UsedCount);
                 }
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "❌ Error while deducting usage for user {UserId}", userId);
             }
         }
 

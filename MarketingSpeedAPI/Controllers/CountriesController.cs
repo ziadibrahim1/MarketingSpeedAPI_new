@@ -76,20 +76,26 @@ namespace MarketingSpeedAPI.Controllers
                 .Select(s => s.Id)
                 .ToListAsync();
 
-            // 🔹 الميزة الخاصة بالحصول على المجموعات
-            var usageFeatureId = await _context.PackageFeatures
+            // ✅ اجلب كل الـ Feature Ids الخاصة بميزة "الحصول على المجموعات"
+            var usageFeatureIds = await _context.PackageFeatures
                 .Where(f => f.forGetingGruops && f.PlatformId == 1)
                 .Select(f => f.Id)
-                .FirstOrDefaultAsync();
-
-            // 🔹 قراءة الاستخدام من subscription_usage
-            var usage = await _context.subscription_usage
-                .Where(u => activeSubs.Contains(u.SubscriptionId) && u.FeatureId == usageFeatureId)
                 .ToListAsync();
 
-            int totalLimit = usage.Sum(u => u.LimitCount);
-            int usedCount = usage.Sum(u => u.UsedCount);
-            int remaining = Math.Max(totalLimit - usedCount, 0);
+            int totalLimit = 0, usedCount = 0, remaining = 0;
+
+            if (usageFeatureIds.Count > 0 && activeSubs.Count > 0)
+            {
+                // 🔹 قراءة الاستخدام من subscription_usage عبر كل الباقات وكل الـ features المطابقة
+                var usage = await _context.subscription_usage
+                    .Where(u => activeSubs.Contains(u.SubscriptionId) &&
+                                usageFeatureIds.Contains(u.FeatureId))
+                    .ToListAsync();
+
+                totalLimit = usage.Sum(u => u.LimitCount);
+                usedCount = usage.Sum(u => u.UsedCount);
+                remaining = Math.Max(totalLimit - usedCount, 0);
+            }
 
             // 🔹 حساب المجموعات التي انضم إليها المستخدم في الساعة الماضية
             int joinedLastHour = await _context.user_joined_groups
@@ -97,6 +103,9 @@ namespace MarketingSpeedAPI.Controllers
 
             int hourlyLimit = 20; // لا يزيد عن 20 في الساعة
             int remainingThisHour = Math.Max(hourlyLimit - joinedLastHour, 0);
+
+            // (اختياري) القرار الفعلي المتاح الآن
+            int effectiveRemaining = Math.Min(remaining, remainingThisHour);
 
             // 🔹 استبعاد المجموعات المنضم إليها مسبقًا
             var joinedInviteCodes = await _context.user_joined_groups
@@ -135,12 +144,13 @@ namespace MarketingSpeedAPI.Controllers
             {
                 success = true,
                 message = "Groups and usage fetched successfully",
-                totalLimit,
-                usedCount,
-                remaining,
+                totalLimit,        // مجموع الحدود عبر كل الباقات
+                usedCount,         // مجموع الاستخدام عبر كل الباقات
+                remaining,         // المتبقي الإجمالي
                 hourlyLimit,
                 joinedLastHour,
                 remainingThisHour,
+                effectiveRemaining, // (اختياري) أقل قيمة بين المتبقي الإجمالي وحد الساعة
                 groups
             });
         }
