@@ -33,6 +33,7 @@ namespace MarketingSpeedAPI.Data
         public DbSet<UserSubscription> UserSubscriptions { get; set; }
         public DbSet<LeftGroup> LeftGroups { get; set; }
         public DbSet<SubscriptionUsage> subscription_usage { get; set; }
+        public DbSet<SystemAlert> system_alerts { get; set; }
         public DbSet<UserAccount> user_accounts { get; set; }
         public DbSet<Message> Messages { get; set; } = null!;
         public DbSet<MessageLog> message_logs { get; set; } = null!;

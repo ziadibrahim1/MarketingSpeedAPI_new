@@ -9,13 +9,26 @@ using TL;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// 1️⃣ Database
+// 1️⃣ Database (مع تفعيل إعادة المحاولة + رفع الوقت)
 builder.Services.AddDbContext<AppDbContext>(options =>
+{
     options.UseMySql(
         builder.Configuration.GetConnectionString("DefaultConnection"),
-        new MySqlServerVersion(new Version(8, 0, 26))
-    )
-);
+        new MySqlServerVersion(new Version(8, 0, 26)),
+        mySqlOptions =>
+        {
+            // ⚡️ أهم شيء لمنع انهيار الاتصال
+            mySqlOptions.EnableRetryOnFailure(
+                maxRetryCount: 5,
+                maxRetryDelay: TimeSpan.FromSeconds(10),
+                errorNumbersToAdd: null
+            );
+
+            // ⛔ منع timeout من EF Core
+            mySqlOptions.CommandTimeout(60);
+        }
+    );
+});
 
 // 2️⃣ Services
 builder.Services.Configure<EmailSettings>(builder.Configuration.GetSection("EmailSettings"));
@@ -34,7 +47,6 @@ builder.Services.AddMemoryCache();
 
 // 6️⃣ Hosted Services
 builder.Services.AddHostedService<DeleteUnverifiedUsersJob>();
-
 
 // 7️⃣ HttpClient
 builder.Services.AddHttpClient("Wasender", client =>
@@ -65,19 +77,15 @@ builder.Services.AddSingleton<Func<TelegramClientManager>>(sp =>
     };
 });
 
-
 builder.Services.AddSignalR();
 
-
+// 🔟 Kestrel
 builder.WebHost.UseKestrel(options =>
 {
     options.ListenAnyIP(80);  // HTTP
-    //options.ListenAnyIP(443, listenOptions =>
-    //{
-    //    listenOptions.UseHttps(certificate); // HTTPS رسمي
-    //});
 });
 
+// 1️⃣1️⃣ Build app
 var app = builder.Build();
 
 app.UseCors("AllowAll");
@@ -88,10 +96,10 @@ app.UseAuthorization();
 app.MapControllers();
 app.MapHub<ChatHub>("/chathub");
 
-// 1️⃣3️⃣ Run
+// 1️⃣3️⃣ Developer mode
 if (app.Environment.IsDevelopment())
 {
     app.UseDeveloperExceptionPage();
 }
-app.Run();
 
+app.Run();

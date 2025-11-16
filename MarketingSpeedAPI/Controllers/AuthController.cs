@@ -37,6 +37,36 @@ namespace MarketingSpeedAPI.Controllers
                 return builder.ToString();
             }
         }
+        
+        [HttpGet("SystemAlert/latest")]
+        public async Task<IActionResult> GetLatestSystemAlert([FromQuery] string platform, [FromQuery] string currentVersion)
+        {
+            var alert = await _context.system_alerts
+                .Where(a => a.Platform == platform)
+                .OrderByDescending(a => a.Id)
+                .FirstOrDefaultAsync();
+
+            if (alert == null)
+                return Ok(new { success = false });
+
+            bool requiresUpdate = !string.IsNullOrEmpty(alert.MinAppVersion)
+                                  && string.Compare(currentVersion, alert.MinAppVersion) < 0;
+
+            return Ok(new
+            {
+                success = true,
+                alert.Id,
+                alert.Title,
+                alert.Message,
+                alert.ButtonText,
+                alert.ActionUrl,
+                alert.IsMandatory,
+                alert.ShowOnce,
+                alert.MinAppVersion,
+                alert.LatestVersion,
+                requiresUpdate
+            });
+        }
 
         [HttpPost("login")]
         public async Task<IActionResult> Login([FromBody] LoginDto dto)

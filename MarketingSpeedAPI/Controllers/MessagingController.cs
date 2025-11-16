@@ -37,7 +37,7 @@ namespace MarketingSpeedAPI.Controllers
         public async Task<IActionResult> SendToGroups(ulong userId, [FromBody] SendGroupsRequest req)
         {
            
-            var today = DateTime.UtcNow.Date;
+            var today = DateTime.Now.Date;
             var isSubscribed = await _context.UserSubscriptions
                 .AnyAsync(s => s.UserId == (int)userId && s.IsActive && s.PaymentStatus == "paid" && s.StartDate <= today && s.EndDate >= today);
 
@@ -67,12 +67,12 @@ namespace MarketingSpeedAPI.Controllers
             {
                 PlatformId = account.PlatformId,
                 UserId = (long)userId,
-                Title = $"Send to groups {DateTime.UtcNow:yyyyMMddHHmmss}",
+                Title = $"Send to groups {DateTime.Now:yyyyMMddHHmmss}",
                 Body = req.Message ?? "", 
                 Targets = JsonConvert.SerializeObject(groupsToSend),
                 Attachments = (req.ImageUrls == null || !req.ImageUrls.Any()) ? null : JsonConvert.SerializeObject(req.ImageUrls),
                 Status = "pending",
-                CreatedAt = DateTime.UtcNow
+                CreatedAt = DateTime.Now
             };
             _context.Messages.Add(newMessage);
             await _context.SaveChangesAsync(); 
@@ -140,7 +140,7 @@ namespace MarketingSpeedAPI.Controllers
                 _context.BlockedGroups.AddRange(newBlockedGroups);
 
             newMessage.Status = allLogs.Any(l => l.Status == "sent") ? "sent" : "failed";
-            newMessage.SentAt = DateTime.UtcNow;
+            newMessage.SentAt = DateTime.Now;
 
             await _context.SaveChangesAsync();
            
@@ -229,7 +229,7 @@ namespace MarketingSpeedAPI.Controllers
                 PlatformId = account.PlatformId,
                 Status = success ? "sent" : "failed",
                 ErrorMessage = errorMessage,
-                AttemptedAt = DateTime.UtcNow,
+                AttemptedAt = DateTime.Now,
                 ExternalMessageId = externalId
             };
 
@@ -367,7 +367,7 @@ namespace MarketingSpeedAPI.Controllers
         [HttpGet("check-packege-account/{userId}")]
         public async Task<IActionResult> CheckPackegeAccount(ulong userId)
         {
-            var today = DateTime.UtcNow.Date;
+            var today = DateTime.Now.Date;
 
             // 🔹 الاشتراكات النشطة
             var subscriptions = await _context.UserSubscriptions
@@ -976,12 +976,12 @@ namespace MarketingSpeedAPI.Controllers
             {
                 PlatformId = req.PlatformId,
                 UserId = (long)req.UserId,
-                Title = $"Send to members {DateTime.UtcNow:yyyyMMddHHmmss}",
+                Title = $"Send to members {DateTime.Now:yyyyMMddHHmmss}",
                 Body = req.Message,
                 Targets = JsonConvert.SerializeObject(uniqueRecipients),
                 Attachments = (req.ImageUrls == null || req.ImageUrls.Count == 0) ? null : JsonConvert.SerializeObject(req.ImageUrls),
                 Status = "pending",
-                CreatedAt = DateTime.UtcNow
+                CreatedAt = DateTime.Now
             };
 
             _context.Messages.Add(newMessage);
@@ -1062,7 +1062,7 @@ namespace MarketingSpeedAPI.Controllers
                             PlatformId = account.PlatformId,
                             Status = response.IsSuccessful ? "sent" : "failed",
                             ErrorMessage = response.IsSuccessful ? null : response.Content,
-                            AttemptedAt = DateTime.UtcNow,
+                            AttemptedAt = DateTime.Now,
                             ExternalMessageId = externalId,
                             toGroupMember = true
                         });
@@ -1106,7 +1106,7 @@ namespace MarketingSpeedAPI.Controllers
                         PlatformId = account.PlatformId,
                         Status = response.IsSuccessful ? "sent" : "failed",
                         ErrorMessage = response.IsSuccessful ? null : response.Content,
-                        AttemptedAt = DateTime.UtcNow,
+                        AttemptedAt = DateTime.Now,
                         ExternalMessageId = externalId,
                         toGroupMember = true
                     });
@@ -1146,7 +1146,7 @@ namespace MarketingSpeedAPI.Controllers
 
             _context.message_logs.AddRange(logs);
             newMessage.Status = logs.Any(l => l.Status == "sent") ? "sent" : "failed";
-            newMessage.SentAt = DateTime.UtcNow;
+            newMessage.SentAt = DateTime.Now;
 
             await _context.SaveChangesAsync();
 
@@ -1199,8 +1199,8 @@ namespace MarketingSpeedAPI.Controllers
                         {
                             UserId = userId,
                             Phone = phone,
-                            CreatedAt = DateTime.UtcNow,
-                            UpdatedAt = DateTime.UtcNow
+                            CreatedAt = DateTime.Now,
+                            UpdatedAt = DateTime.Now
 
                         };
                         _context.blocked_chats.Add(blocked);
@@ -1270,36 +1270,24 @@ namespace MarketingSpeedAPI.Controllers
         public async Task<IActionResult> SendToSingleGroup(ulong userId, [FromBody] SendSingleGroupRequest req)
         {
             if (string.IsNullOrEmpty(req.GroupId))
-            {
                 return BadRequest(new { success = false, blocked = false, error = "GroupId is required" });
-            }
 
             var account = await _context.user_accounts
-                .AsNoTracking()
                 .FirstOrDefaultAsync(a => a.UserId == (int)userId && a.PlatformId == 1 && a.Status == "connected");
 
             if (account == null)
-            {
                 return Ok(new { success = false, blocked = false, error = "No connected account found" });
-            }
 
-            string? finalText = null;
-            if (!string.IsNullOrWhiteSpace(req.Message))
-            {
-                finalText = SpinText(req.Message);
-            }
-
+            // ✅ تجهيز الرسالة
+            string? finalText = !string.IsNullOrWhiteSpace(req.Message) ? SpinText(req.Message) : null;
             var body = new Dictionary<string, object?> { { "to", req.GroupId } };
-            bool hasAttachment = req.ImageUrls != null && req.ImageUrls.Any();
 
+            bool hasAttachment = req.ImageUrls != null && req.ImageUrls.Any();
             if (hasAttachment)
             {
                 var mediaUrl = req.ImageUrls.First();
                 body[GetMessageTypeFromExtension(mediaUrl)] = mediaUrl;
-                if (finalText != null)
-                {
-                    body["text"] = finalText;
-                }
+                if (finalText != null) body["text"] = finalText;
             }
             else if (finalText != null)
             {
@@ -1307,19 +1295,17 @@ namespace MarketingSpeedAPI.Controllers
             }
 
             if (body.Count <= 1)
-            {
                 return Ok(new { success = false, blocked = false, error = "Message body and attachments are empty" });
-            }
 
+            // ✅ إرسال الرسالة فعليًا
             var request = new RestRequest("/api/send-message", Method.Post);
             request.AddHeader("Authorization", $"Bearer {account.AccessToken}");
             request.AddHeader("Content-Type", "application/json");
             request.AddJsonBody(body);
 
             var response = await _client.ExecuteAsync(request);
-
             bool success = response.IsSuccessful;
-            string errorMessage = success ? null : (response.ErrorMessage ?? response.Content);
+            string? errorMessage = success ? null : (response.ErrorMessage ?? response.Content);
 
             bool isBlocked = !success && (
                 errorMessage?.Contains("group not found", StringComparison.OrdinalIgnoreCase) == true ||
@@ -1327,52 +1313,116 @@ namespace MarketingSpeedAPI.Controllers
                 errorMessage?.Contains("forbidden", StringComparison.OrdinalIgnoreCase) == true
             );
 
-            _ = Task.Run(async () =>
+            // ✅ تسجيل السجل في MessageLog مباشرة (بدون Task.Run)
+            try
+            {
+                string? externalId = null;
+                if (success && !string.IsNullOrEmpty(response.Content))
+                {
+                    try { externalId = JObject.Parse(response.Content)["data"]?["msgId"]?.ToString(); } catch { }
+                }
+
+                var log = new MessageLog
+                {
+                    UserId = (int)userId,
+                    body = req.Message,
+                    sender = NormalizePhone(account.AccountIdentifier),
+                    MessageId = (int)(req.MainMessageId ?? 0),
+                    Recipient = req.GroupId,
+                    PlatformId = account.PlatformId,
+                    Status = success ? "sent" : "failed",
+                    ErrorMessage = errorMessage,
+                    AttemptedAt = DateTime.Now,
+                    ExternalMessageId = externalId
+                };
+
+                _context.message_logs.Add(log);
+
+                // ✅ لو المجموعة محظورة نسجلها
+                if (isBlocked)
+                {
+                    bool exists = await _context.BlockedGroups
+                        .AnyAsync(bg => bg.GroupId == req.GroupId && bg.UserId == (int)userId);
+
+                    if (!exists)
+                    {
+                        _context.BlockedGroups.Add(new BlockedGroup
+                        {
+                            GroupId = req.GroupId,
+                            UserId = (int)userId,
+                            CreatedAt = DateTime.Now
+                        });
+                    }
+                }
+
+                await _context.SaveChangesAsync();
+            }
+            catch (Exception ex)
+            {
+            }
+
+            // ✅ خصم الاستخدام (لـ forGetingGroups أو forCreatingGroups)
+            if (success)
             {
                 try
                 {
-                    string? externalId = null;
-                    if (success && !string.IsNullOrEmpty(response.Content))
+                    var activeSubs = await _context.UserSubscriptions
+                        .Where(s => s.UserId == (int)userId &&
+                                    s.IsActive &&
+                                    s.PaymentStatus == "paid" &&
+                                    s.StartDate <= DateTime.Now &&
+                                    s.EndDate >= DateTime.Now)
+                        .OrderBy(s => s.StartDate)
+                        .ToListAsync();
+
+                    foreach (var sub in activeSubs)
                     {
-                        try { externalId = JObject.Parse(response.Content)["data"]?["msgId"]?.ToString(); } catch { }
-                    }
+                        // 🔹 البحث عن الميزة الخاصة بالإرسال على المجموعات
+                        var feature = await _context.PackageFeatures
+                            .FirstOrDefaultAsync(f => f.PackageId == sub.PackageId && f.forGetingGruops == true);
 
-                    using var scope = _serviceProvider.CreateScope();
-                    var scopedContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+                        if (feature == null)
+                            continue;
 
-                    var log = new MessageLog
-                    {
-                        UserId = (int)userId,
-                        body = req.Message,
-                        sender = NormalizePhone(account.AccountIdentifier),
-                        MessageId = (int)(req.MainMessageId ?? 0), 
-                        Recipient = req.GroupId,
-                        PlatformId = account.PlatformId,
-                        Status = success ? "sent" : "failed",
-                        ErrorMessage = errorMessage,
-                        AttemptedAt = DateTime.UtcNow,
-                        ExternalMessageId = externalId
-                    };
+                        var usage = await _context.subscription_usage
+                            .FirstOrDefaultAsync(u => u.UserId == (int)userId &&
+                                                      u.SubscriptionId == sub.Id &&
+                                                      u.FeatureId == feature.Id);
 
-                    scopedContext.message_logs.Add(log);
-
-                    if (isBlocked)
-                    {
-                        if (!await scopedContext.BlockedGroups.AnyAsync(bg => bg.GroupId == req.GroupId && bg.UserId == (int)userId))
+                        if (usage == null)
                         {
-                            scopedContext.BlockedGroups.Add(new BlockedGroup { GroupId = req.GroupId, UserId = (int)userId, CreatedAt = DateTime.UtcNow });
+                            usage = new SubscriptionUsage
+                            {
+                                UserId = (int)userId,
+                                SubscriptionId = sub.Id,
+                                PackageId = sub.PackageId,
+                                FeatureId = feature.Id,
+                                LimitCount = feature.LimitCount,
+                                UsedCount = 1,
+                                LastUsedAt = DateTime.Now
+                            };
+                            _context.subscription_usage.Add(usage);
+                            await _context.SaveChangesAsync();
+                            break;
+                        }
+                        else if (usage.LimitCount > usage.UsedCount)
+                        {
+                            usage.UsedCount += 1;
+                            usage.LastUsedAt = DateTime.Now;
+                            _context.subscription_usage.Update(usage);
+                            await _context.SaveChangesAsync();
+                            break;
                         }
                     }
-                    await scopedContext.SaveChangesAsync();
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "Error in background logging for SendToSingleGroup");
                 }
-            });
+            }
 
             return Ok(new { success, blocked = isBlocked });
         }
+
         string NormalizePhone(string number)
         {
             if (string.IsNullOrWhiteSpace(number))
@@ -1407,10 +1457,7 @@ namespace MarketingSpeedAPI.Controllers
                 return Ok(new { success = false, blocked = false, error = "Recipient number matches sender" });
 
             var senderNumber = NormalizePhone(account.AccountIdentifier);
-
-         
             var rand = new Random();
-
             double NormalDelay(double meanMs, double stdDevMs, double min, double max)
             {
                 double u1 = 1.0 - rand.NextDouble();
@@ -1466,8 +1513,7 @@ namespace MarketingSpeedAPI.Controllers
             {
                 Console.WriteLine($"⚠️ Error saving contact: {ex.Message}");
             }
-
-            // ✅ تجهيز جسم الرسالة
+            // ✅ تجهيز الرسالة
             var body = new Dictionary<string, object?> { { "to", NormalizePhone(req.Recipient) } };
             if (req.ImageUrls != null && req.ImageUrls.Any())
             {
@@ -1475,7 +1521,7 @@ namespace MarketingSpeedAPI.Controllers
                 body[GetMessageTypeFromExtension(mediaUrl)] = mediaUrl;
                 if (req.Message != null) body["text"] = req.Message;
             }
-            else if (req.Message != null)
+            else if (!string.IsNullOrEmpty(req.Message))
             {
                 body["text"] = req.Message;
             }
@@ -1483,7 +1529,7 @@ namespace MarketingSpeedAPI.Controllers
             if (body.Count <= 1)
                 return Ok(new { success = false, blocked = false, error = "Message body and attachments are empty" });
 
-            // ✅ محاكاة الكتابة فقط
+
             if (!string.IsNullOrEmpty(req.Message))
             {
                 try
@@ -1537,7 +1583,7 @@ namespace MarketingSpeedAPI.Controllers
                 }
             }
 
-            // ✅ إرسال الرسالة مباشرة
+            // ✅ إرسال الرسالة عبر Wasender API
             var sendReq = new RestRequest("/api/send-message", Method.Post);
             sendReq.AddHeader("Authorization", $"Bearer {account.AccessToken}");
             sendReq.AddHeader("Content-Type", "application/json");
@@ -1549,16 +1595,13 @@ namespace MarketingSpeedAPI.Controllers
             string? externalId = null;
 
             const int maxRetries = 3;
-            int attempt = 0;
-
-            while (attempt < maxRetries)
+            for (int attempt = 1; attempt <= maxRetries; attempt++)
             {
-                attempt++;
                 var response = await _client.ExecuteAsync(sendReq);
 
                 if ((int)response.StatusCode == 429)
                 {
-                    int waitSec = (int)(Math.Pow(2, attempt) * 2 + Random.Shared.Next(0, 3));
+                    int waitSec = (int)(Math.Pow(2, attempt) * 2 + rand.Next(0, 3));
                     await Task.Delay(waitSec * 1000);
                     continue;
                 }
@@ -1577,7 +1620,6 @@ namespace MarketingSpeedAPI.Controllers
 
                 isBlocked = !success && (
                     errorMessage?.Contains("not found", StringComparison.OrdinalIgnoreCase) == true ||
-                    errorMessage?.Contains("not a participant", StringComparison.OrdinalIgnoreCase) == true ||
                     errorMessage?.Contains("forbidden", StringComparison.OrdinalIgnoreCase) == true ||
                     errorMessage?.Contains("blocked", StringComparison.OrdinalIgnoreCase) == true
                 );
@@ -1591,117 +1633,89 @@ namespace MarketingSpeedAPI.Controllers
                 break;
             }
 
-            // ✅ حفظ في السجل
-            _ = Task.Run(async () =>
+            // ✅ تسجيل الرسالة في MessageLog مباشرة (بدون Task.Run)
+            try
+            {
+                var log = new MessageLog
+                {
+                    MessageId = (int)(req.MainMessageId ?? 0),
+                    Recipient = req.Recipient,
+                    sender = senderNumber,
+                    UserId = (int)userId,
+                    body = req.Message,
+                    PlatformId = account.PlatformId,
+                    Status = success ? "sent" : "failed",
+                    ErrorMessage = errorMessage,
+                    AttemptedAt = DateTime.Now,
+                    ExternalMessageId = externalId
+                };
+
+                _context.message_logs.Add(log);
+                await _context.SaveChangesAsync();
+            }
+            catch (Exception ex)
+            {
+            }
+
+            // ✅ خصم الاستخدام من جدول subscription_usage بعد الإرسال الناجح
+            if (success)
             {
                 try
                 {
-                    using var scope = _serviceProvider.CreateScope();
-                    var scopedContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+                    var activeSubs = await _context.UserSubscriptions
+                        .Where(s => s.UserId == (int)userId &&
+                                    s.IsActive &&
+                                    s.PaymentStatus == "paid" &&
+                                    s.StartDate <= DateTime.Now &&
+                                    s.EndDate >= DateTime.Now)
+                        .OrderBy(s => s.StartDate)
+                        .ToListAsync();
 
-                    var log = new MessageLog
+                    foreach (var sub in activeSubs)
                     {
-                        MessageId = (int)(req.MainMessageId ?? 0),
-                        Recipient = req.Recipient,
-                        sender = senderNumber,
-                        UserId = (int)userId,
-                        body = req.Message,
-                        PlatformId = account.PlatformId,
-                        Status = success ? "sent" : "failed",
-                        ErrorMessage = errorMessage,
-                        AttemptedAt = DateTime.UtcNow,
-                        ExternalMessageId = externalId
-                    };
-                    scopedContext.message_logs.Add(log);
+                        var feature = await _context.PackageFeatures
+                            .FirstOrDefaultAsync(f => f.PackageId == sub.PackageId && f.forMembers == true);
 
-                    if (isBlocked)
-                    {
-                        if (!await scopedContext.BlockedGroups
-                            .AnyAsync(bg => bg.GroupId == req.Recipient && bg.UserId == (int)userId))
+                        if (feature == null)
+                            continue;
+
+                        var usage = await _context.subscription_usage
+                            .FirstOrDefaultAsync(u => u.UserId == (int)userId &&
+                                                      u.SubscriptionId == sub.Id &&
+                                                      u.FeatureId == feature.Id);
+
+                        if (usage == null)
                         {
-                            scopedContext.BlockedGroups.Add(new BlockedGroup
+                            usage = new SubscriptionUsage
                             {
-                                GroupId = req.Recipient,
                                 UserId = (int)userId,
-                                CreatedAt = DateTime.UtcNow
-                            });
+                                SubscriptionId = sub.Id,
+                                PackageId = sub.PackageId,
+                                FeatureId = feature.Id,
+                                LimitCount = feature.LimitCount,
+                                UsedCount = 1,
+                                LastUsedAt = DateTime.Now
+                            };
+                            _context.subscription_usage.Add(usage);
+                            await _context.SaveChangesAsync();
+                            break;
                         }
-                    }
-                    // ✅ خصم 1 من استخدام ميزة الإرسال إلى الأعضاء بعد الإرسال الناجح
-                    // ✅ خصم 1 من استخدام ميزة الإرسال للأعضاء بعد الإرسال الناجح
-                    if (success)
-                    {
-                        var activeSubs = await scopedContext.UserSubscriptions
-                            .Where(s => s.UserId == (int)userId &&
-                                        s.IsActive &&
-                                        s.PaymentStatus == "paid" &&
-                                        s.StartDate <= DateTime.UtcNow &&
-                                        s.EndDate >= DateTime.UtcNow)
-                            .OrderBy(s => s.StartDate)
-                            .ToListAsync();
-
-                        if (activeSubs.Any())
+                        else if (usage.LimitCount > usage.UsedCount)
                         {
-                            foreach (var sub in activeSubs)
-                            {
-                                // 🔹 البحث عن الميزة الخاصة بالإرسال للأعضاء (forMembers = true)
-                                var feature = await scopedContext.PackageFeatures
-                                    .FirstOrDefaultAsync(f => f.PackageId == sub.PackageId && f.forMembers == true);
-
-                                if (feature == null)
-                                    continue;
-
-                                var usage = await scopedContext.subscription_usage
-                                    .FirstOrDefaultAsync(u => u.UserId == (int)userId &&
-                                                              u.SubscriptionId == sub.Id &&
-                                                              u.FeatureId == feature.Id);
-
-                                // لو الاستخدام مش موجود نضيفه جديد
-                                if (usage == null)
-                                {
-                                    usage = new SubscriptionUsage
-                                    {
-                                        UserId = (int)userId,
-                                        SubscriptionId = sub.Id,
-                                        PackageId = sub.PackageId,
-                                        FeatureId = feature.Id,
-                                        LimitCount = feature.LimitCount,
-                                        UsedCount = 1,
-                                        LastUsedAt = DateTime.UtcNow
-                                    };
-                                    scopedContext.subscription_usage.Add(usage);
-                                    await scopedContext.SaveChangesAsync();
-                                    break; // ✅ خصمنا من أول باقة متاحة — نخرج من الحلقة
-                                }
-                                else
-                                {
-                                    // إذا الباقة فيها رصيد متبقي
-                                    int remaining = usage.LimitCount - usage.UsedCount;
-                                    if (remaining > 0)
-                                    {
-                                        usage.UsedCount += 1;
-                                        usage.LastUsedAt = DateTime.UtcNow;
-                                        scopedContext.subscription_usage.Update(usage);
-                                        await scopedContext.SaveChangesAsync();
-                                        break; // ✅ خصمنا من هذه الباقة فقط
-                                    }
-                                    // لو خلصت نكمل على الباقة اللي بعدها
-                                }
-                            }
+                            usage.UsedCount += 1;
+                            usage.LastUsedAt = DateTime.Now;
+                            _context.subscription_usage.Update(usage);
+                            await _context.SaveChangesAsync();
+                            break;
                         }
                     }
-
-
-
-                    await scopedContext.SaveChangesAsync();
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"⚠️ Log save failed: {ex.Message}");
                 }
-            });
+            }
 
-            // ✅ النتيجة مع الإحصاءات اليومية
+            // ✅ النتيجة النهائية
             return Ok(new
             {
                 success,
@@ -1805,8 +1819,8 @@ namespace MarketingSpeedAPI.Controllers
                     .OrderBy(m => m.AttemptedAt)
                     .FirstOrDefaultAsync();
 
-                DateTime firstSendDate = firstLog?.AttemptedAt ?? DateTime.UtcNow;
-                int totalDays = (DateTime.UtcNow.Date - firstSendDate.Date).Days;
+                DateTime firstSendDate = firstLog?.AttemptedAt ?? DateTime.Now;
+                int totalDays = (DateTime.Now.Date - firstSendDate.Date).Days;
                 int dayInCycle = (totalDays % 30) + 1;
 
                 // 🧮 الحد اليومي بناءً على اليوم داخل الدورة
@@ -1819,7 +1833,7 @@ namespace MarketingSpeedAPI.Controllers
                 };
 
                 // 📆 عدد الرسائل المرسلة اليوم (للأشخاص فقط)
-                DateTime today = DateTime.UtcNow.Date;
+                DateTime today = DateTime.Now.Date;
                 int sentToday = await _context.message_logs
                     .CountAsync(m =>
                         m.sender == senderNumber &&
@@ -1895,10 +1909,10 @@ namespace MarketingSpeedAPI.Controllers
                 {
                     UserId = (int)userId,
                     GroupId = groupJid,
-                    StartDate = DateTime.UtcNow,
-                    EndDate = DateTime.UtcNow.AddMonths(1),
+                    StartDate = DateTime.Now,
+                    EndDate = DateTime.Now.AddMonths(1),
                     Status = "active",
-                    LastBatchTime = DateTime.UtcNow
+                    LastBatchTime = DateTime.Now
                 };
                 _context.group_subscriptions.Add(sub);
                 await _context.SaveChangesAsync();
@@ -1976,7 +1990,7 @@ namespace MarketingSpeedAPI.Controllers
                 var sub = await _context.group_subscriptions.FirstOrDefaultAsync(g => g.GroupId == req.GroupId);
                 if (sub != null)
                 {
-                    sub.LastBatchTime = DateTime.UtcNow;
+                    sub.LastBatchTime = DateTime.Now;
                     _context.group_subscriptions.Update(sub);
                     await _context.SaveChangesAsync();
                 }
@@ -1999,7 +2013,7 @@ namespace MarketingSpeedAPI.Controllers
             try
             {
                 // 🧩 اجلب جميع الاشتراكات النشطة
-                var today = DateTime.UtcNow.Date;
+                var today = DateTime.Now.Date;
                 var activeSubs = await _context.UserSubscriptions
                     .Where(s => s.UserId == userId &&
                                 s.IsActive &&

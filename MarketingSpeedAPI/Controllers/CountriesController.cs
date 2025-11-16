@@ -240,19 +240,20 @@ namespace MarketingSpeedAPI.Controllers
 
 
 
-
         [HttpPost("accept-invite/{userId}")]
         public async Task<IActionResult> AcceptInvite(ulong userId, [FromBody] InviteRequest req)
         {
             var now = DateTime.UtcNow;
-
-            // ✅ التحقق من عدد المجموعات التي انضم إليها المستخدم خلال آخر ساعة
+            var today = now.Date;
             var oneHourAgo = now.AddHours(-1);
-            int joinedCountLastHour = await _context.user_joined_groups
-                .Where(g => g.user_id == (int)userId && g.joined_at >= oneHourAgo)
-                .CountAsync();
 
-            if (joinedCountLastHour > 21)
+            // ================================
+            // 1️⃣ حد الساعة (20 مجموعة لكل ساعة)
+            // ================================
+            int joinedCountLastHour = await _context.user_joined_groups
+                .CountAsync(g => g.user_id == (int)userId && g.joined_at >= oneHourAgo);
+
+            if (joinedCountLastHour >= 20)
             {
                 return Ok(new
                 {
@@ -262,44 +263,85 @@ namespace MarketingSpeedAPI.Controllers
                 });
             }
 
-            var today = now.Date;
+            // ================================
+            // 2️⃣ الاشتراكات النشطة
+            // ================================
+            var activeSubs = await _context.UserSubscriptions
+                .Where(s =>
+                    s.UserId == (int)userId &&
+                    s.IsActive &&
+                    s.PaymentStatus == "paid" &&
+                    s.StartDate <= today &&
+                    s.EndDate >= today)
+                .ToListAsync();
 
-            // ✅ 1) التحقق من الاشتراك
-            var subscription = await _context.UserSubscriptions
-                .Where(s => s.UserId == (int)userId &&
-                            s.IsActive &&
-                            s.Add_groups_limit > 0 &&
-                            s.PaymentStatus == "paid" &&
-                            s.StartDate <= today &&
-                            s.EndDate >= today)
-                .OrderByDescending(s => s.EndDate)
-                .FirstOrDefaultAsync();
+            if (!activeSubs.Any())
+                return Ok(new { success = false, status = "no_subscription", message = "No active subscription found" });
 
-            if (subscription == null)
-                return Ok(new { success = false, status = "0", message = "Subscription invalid" });
+            var subIds = activeSubs.Select(s => s.Id).ToList();
 
-            // ✅ 2) التحقق من الحساب المتصل
+            // ================================
+            // 3️⃣ جلب جميع الميزات الخاصة بإضافة المجموعات
+            // ================================
+            var featureIds = await _context.PackageFeatures
+                .Where(f => f.PlatformId == 1 && f.forGetingGruops)
+                .Select(f => f.Id)
+                .ToListAsync();
+
+            if (!featureIds.Any())
+                return Ok(new { success = false, status = "feature_not_found", message = "Feature for joining groups not found" });
+
+            // ================================
+            // 4️⃣ جلب الاستخدام من كل الباقات
+            // ================================
+            var usageList = await _context.subscription_usage
+                .Where(u => subIds.Contains(u.SubscriptionId) && featureIds.Contains(u.FeatureId))
+                .ToListAsync();
+
+            int totalLimit = usageList.Sum(u => u.LimitCount);
+            int totalUsed = usageList.Sum(u => u.UsedCount);
+            int remaining = Math.Max(totalLimit - totalUsed, 0);
+
+            if (remaining <= 0)
+            {
+                return Ok(new
+                {
+                    success = false,
+                    status = "package_limit",
+                    message = "تم استهلاك الحد المسموح للانضمام إلى المجموعات"
+                });
+            }
+
+            // ================================
+            // 5️⃣ التحقق من حساب الواتساب المتصل
+            // ================================
             var account = await _context.user_accounts
-                .FirstOrDefaultAsync(a => a.UserId == (int)userId && a.PlatformId == 1 && a.Status == "connected");
+                .FirstOrDefaultAsync(a =>
+                    a.UserId == (int)userId &&
+                    a.PlatformId == 1 &&
+                    a.Status == "connected");
 
             if (account == null || string.IsNullOrEmpty(account.WasenderSessionId?.ToString()))
-                return Ok(new { success = false, status = "1", message = "No account found" });
+                return Ok(new { success = false, status = "no_account", message = "No connected WhatsApp account" });
 
             if (string.IsNullOrWhiteSpace(req.Code))
-                return BadRequest(new { success = false, message = "Invite code is required" });
+                return BadRequest(new { success = false, status = "invalid_code", message = "Invite code is required" });
 
-            // ✅ 3) جلب بيانات المجموعة من رابط الدعوة
+            // ================================
+            // 6️⃣ جلب بيانات الدعوة للتحقق من صحتها
+            // ================================
             var inviteRequest = new RestRequest($"/api/groups/invite/{req.Code}", Method.Get);
             inviteRequest.AddHeader("Authorization", $"Bearer {account.AccessToken}");
             var inviteResp = await _client.ExecuteAsync(inviteRequest);
 
             if (!inviteResp.IsSuccessful)
             {
-                return StatusCode((int)inviteResp.StatusCode, new
+                return Ok(new
                 {
                     success = false,
-                    message = "Failed to fetch invite group info",
-                    details = inviteResp.Content
+                    status = "invite_fetch_failed",
+                    message = "Failed to fetch invite info",
+                    reason = inviteResp.Content
                 });
             }
 
@@ -307,109 +349,134 @@ namespace MarketingSpeedAPI.Controllers
             var inviteGroupId = inviteJson["data"]?["id"]?.ToString();
 
             if (string.IsNullOrEmpty(inviteGroupId))
-            {
-                return BadRequest(new { success = false, message = "Invalid invite code response" });
-            }
+                return Ok(new { success = false, status = "invalid_code", message = "Invalid invite code" });
 
-            // ✅ 4) التحقق من المجموعات الحالية للمستخدم
+            // ================================
+            // 7️⃣ التأكد إن المستخدم مش عضو مسبقاً
+            // ================================
             var groupsRequest = new RestRequest("/api/groups", Method.Get);
             groupsRequest.AddHeader("Authorization", $"Bearer {account.AccessToken}");
             var groupsResp = await _client.ExecuteAsync(groupsRequest);
+
             if (!groupsResp.IsSuccessful)
-                return StatusCode((int)groupsResp.StatusCode, groupsResp.Content);
+                return Ok(new { success = false, status = "groups_fetch_failed", message = groupsResp.Content });
 
             var groupsJson = JObject.Parse(groupsResp.Content);
             var existingGroups = groupsJson["data"]?.ToObject<List<JObject>>() ?? new List<JObject>();
 
-            bool alreadyMember = existingGroups.Any(g =>
-                string.Equals(g["id"]?.ToString(), inviteGroupId, StringComparison.OrdinalIgnoreCase));
+            bool alreadyMember = existingGroups.Any(g => g["id"]?.ToString() == inviteGroupId);
 
             if (alreadyMember)
             {
-                return Ok(new
-                {
-                    success = true,
-                    message = "Already a member of this group",
-                    skipped = true,
-                    groupId = inviteGroupId
-                });
+                return Ok(new { success = true, skipped = true, message = "Already a member" });
             }
 
-            // ✅ 5) الانضمام للمجموعة فعليًا
+            // ================================
+            // 8️⃣ محاولة الانضمام (مرة واحدة فقط)
+            // ================================
             var joinRequest = new RestRequest("/api/groups/invite/accept", Method.Post);
             joinRequest.AddHeader("Authorization", $"Bearer {account.AccessToken}");
             joinRequest.AddHeader("Content-Type", "application/json");
             joinRequest.AddJsonBody(new { code = req.Code });
 
-            var response = await _client.ExecuteAsync(joinRequest);
+            var joinResp = await _client.ExecuteAsync(joinRequest);
 
-            if (!response.IsSuccessful)
+            if (!joinResp.IsSuccessful)
             {
-                return StatusCode((int)response.StatusCode, new
+                return Ok(new
                 {
                     success = false,
+                    status = "join_failed",
                     message = "Failed to accept invite",
-                    details = response.Content
+                    reason = joinResp.Content,
+                    httpCode = joinResp.StatusCode
                 });
             }
 
+            JObject joinJson;
             try
             {
-                var json = JObject.Parse(response.Content);
-
-                var existingGroup = await _context.user_joined_groups
-                    .FirstOrDefaultAsync(g => g.user_id == (int)userId && g.group_invite_code == req.Code);
-
-                if (existingGroup == null)
-                {
-                    var joinedGroup = new UserJoinedGroup
-                    {
-                        user_id = (int)userId,
-                        group_invite_code = req.Code,
-                        group_name = json["data"]?["subject"]?.ToString() ?? "",
-                        joined_at = DateTime.UtcNow,
-                        is_active = true
-                    };
-
-                    _context.user_joined_groups.Add(joinedGroup);
-                    subscription.Add_groups_limit -= 1;
-                    _context.UserSubscriptions.Update(subscription);
-                }
-                else if (!existingGroup.is_active)
-                {
-                    existingGroup.is_active = true;
-                    existingGroup.joined_at = DateTime.UtcNow;
-                    _context.user_joined_groups.Update(existingGroup);
-
-                    subscription.Add_groups_limit -= 1;
-                    _context.UserSubscriptions.Update(subscription);
-                }
-
-                var leftGroup = await _context.LeftGroups
-                    .FirstOrDefaultAsync(l => l.UserId == (int)userId && l.InviteLink == req.Code);
-
-                if (leftGroup != null)
-                    _context.LeftGroups.Remove(leftGroup);
-
-                await _context.SaveChangesAsync();
-
-                return Ok(new
-                {
-                    success = true,
-                    message = "Invite accepted successfully",
-                    data = json,
-                    remainingLimit = subscription.Add_groups_limit
-                });
+                joinJson = JObject.Parse(joinResp.Content);
             }
             catch
             {
                 return Ok(new
                 {
-                    success = true,
-                    message = "Invite accepted",
-                    rawResponse = response.Content
+                    success = false,
+                    status = "invalid_json",
+                    message = "Invalid JSON from WhatsApp API",
+                    raw = joinResp.Content
                 });
             }
+
+            string apiSuccess = joinJson["success"]?.ToString() ?? "false";
+            string groupName = joinJson["data"]?["groupId"]?.ToString() ?? "";
+
+            if (apiSuccess != "True")
+            {
+                return Ok(new
+                {
+                    success = false,
+                    status = "api_rejected",
+                    message = "WhatsApp API rejected the request",
+                    reason = joinResp.Content
+                });
+            }
+
+            // ================================
+            // 9️⃣ تخزين الانضمام
+            // ================================
+            var existing = await _context.user_joined_groups
+                .FirstOrDefaultAsync(g => g.user_id == (int)userId &&
+                                          g.group_invite_code == req.Code);
+
+            if (existing == null)
+            {
+                _context.user_joined_groups.Add(new UserJoinedGroup
+                {
+                    user_id = (int)userId,
+                    group_invite_code = req.Code,
+                    group_name = groupName,
+                    joined_at = now,
+                    is_active = true
+                });
+            }
+            else
+            {
+                existing.is_active = true;
+                existing.joined_at = now;
+                _context.user_joined_groups.Update(existing);
+            }
+
+            // ================================
+            // 🔟 توزيع الخصم على الباقات
+            // ================================
+            var orderedUsage = usageList
+                .OrderBy(u => (u.LimitCount - u.UsedCount))
+                .ToList();
+
+            foreach (var u in orderedUsage)
+            {
+                int remainingCount = u.LimitCount - u.UsedCount;
+
+                if (remainingCount > 0)
+                {
+                    u.UsedCount += 1;
+                    _context.subscription_usage.Update(u);
+                    break;
+                }
+            }
+
+            await _context.SaveChangesAsync();
+
+            return Ok(new
+            {
+                success = true,
+                skipped = false,
+                message = "Invite accepted successfully",
+                groupName,
+                remainingLimit = remaining - 1
+            });
         }
 
 
