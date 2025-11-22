@@ -1,75 +1,175 @@
-﻿using MarketingSpeedAPI.Models;
+﻿using MarketingSpeedAPI.Data;
+using MarketingSpeedAPI.Models;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using Newtonsoft.Json;
 using RestSharp;
+using System.Text;
 
 namespace MarketingSpeedAPI.Controllers
 {
     [ApiController]
     [Route("api/[controller]")]
-    public class paymentsController : Controller
+    public class PaymentsController : Controller
     {
-        [HttpPost("create-session")]
-        public async Task<IActionResult> CreatePayment([FromBody] PaymentRequest req)
+        private readonly AppDbContext _context;
+        private readonly MoyasarSettings _settings;
+
+        public PaymentsController(AppDbContext context, IOptions<MoyasarSettings> settings)
+        {
+            _context = context;
+            _settings = settings.Value;
+        }
+
+        // ----------------------------------------------------
+        // 1) CALCULATE PRICE AFTER COUPON
+        // ----------------------------------------------------
+        [HttpPost("calc")]
+        public async Task<IActionResult> CalcPrice([FromBody] PaymentCalcRequest req)
+        {
+            var package = await _context.Packages
+                .FirstOrDefaultAsync(p => p.Id == req.PackageId);
+
+            if (package == null)
+                return BadRequest(new { error = "Package not found" });
+
+            decimal originalPrice = 1;
+            decimal finalPrice = originalPrice;
+            int? couponId = null;
+
+            if (!string.IsNullOrWhiteSpace(req.Coupon))
+            {
+                var coupon = await _context.Coupons
+                    .FirstOrDefaultAsync(c =>
+                        c.Code == req.Coupon &&
+                        c.IsActive &&
+                        c.ExpiryDate >= DateTime.UtcNow.Date);
+
+                if (coupon != null)
+                {
+                    couponId = coupon.Id;
+
+                    if (coupon.DiscountType == "percent")
+                    {
+                        decimal discount = originalPrice * (coupon.DiscountValue / 100);
+
+                        if (coupon.MaxDiscount != null && discount > coupon.MaxDiscount)
+                            discount = coupon.MaxDiscount.Value;
+
+                        finalPrice = originalPrice - discount;
+                    }
+                    else if (coupon.DiscountType == "amount")
+                    {
+                        finalPrice = originalPrice - coupon.DiscountValue;
+                    }
+
+                    if (finalPrice < 1)
+                        finalPrice = 1;
+                }
+            }
+
+            return Ok(new
+            {
+                packageId = req.PackageId,
+                originalPrice,
+                finalPrice,
+                couponId
+            });
+        }
+
+        // ----------------------------------------------------
+        // 2) VERIFY PAYMENT AND ACTIVATE PACKAGE
+        // ----------------------------------------------------
+        [HttpPost("verify")]
+        public async Task<IActionResult> VerifyPayment([FromBody] VerifyPaymentRequest req)
         {
             try
             {
-                var options = new RestClientOptions("https://api.moyasar.com/v1/payments")
-                {
-                    MaxTimeout = -1,
-                };
-                var client = new RestClient(options);
+                // 1️⃣ استعلام حالة الدفع من ميسّر
+                string secretKey = _settings.SecretKey; // مفتاح sk_test الكامل
+                var client = new RestClient($"https://api.moyasar.com/v1/payments/{req.PaymentId}");
 
-                var request = new RestRequest("", Method.Post);
-                request.AddHeader("Content-Type", "application/json");
-                request.AddHeader("Accept", "application/json");
+                var request = new RestRequest("", Method.Get);
+                // لاحظ: نمرر "" أو null كـ endpoint
 
-                // ⚠️ استخدم مفاتيحك الحقيقية من حساب ميسر
-                string moyasarApiKey = "sk_test_xxxxxxxxxxxxxxxxx"; // المفتاح السري
-
-                // ⚙️ بيانات الدفع
-                var paymentData = new
-                {
-                    given_id = Guid.NewGuid().ToString(),
-                    amount = (int)(req.Amount * 100), // بالهللة
-                    currency = "SAR",
-                    description = $"Subscription for package {req.PackageId}",
-                    callback_url = "https://marketingspeed.online/payment/success",
-                    source = new
-                    {
-                        type = "creditcard",
-                        name = req.CardName ?? "Customer",
-                        number = req.CardNumber ?? "4111111111111111",
-                        month = req.Month,
-                        year = req.Year,
-                        cvc = req.Cvc,
-                        statement_descriptor = "MarketingSpeed",
-                        _3ds = true,
-                        manual = false,
-                        save_card = false
-                    },
-                    metadata = new
-                    {
-                        customer_id = req.UserId.ToString(),
-                        package_id = req.PackageId.ToString(),
-                        coupon = req.Coupon
-                    },
-                    apply_coupon = !string.IsNullOrEmpty(req.Coupon)
-                };
-
-                request.AddStringBody(JsonConvert.SerializeObject(paymentData), DataFormat.Json);
-                request.AddHeader("Authorization", "Basic " + Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes($"{moyasarApiKey}:")));
+                string auth = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes($"{secretKey}:"));
+                request.AddHeader("Authorization", "Basic " + auth);
 
                 var response = await client.ExecuteAsync(request);
-                return Content(response.Content ?? "{}", "application/json");
+
+                if (!response.IsSuccessful)
+                    return BadRequest(new { message = "Failed to fetch payment details", detail = response.Content });
+
+                var payment = JsonConvert.DeserializeObject<MoyasarPaymentResponse>(response.Content);
+
+                // 2️⃣ التأكد من أن الدفع ناجح فعلياً
+                if (payment.status != "paid")
+                {
+                    // حفظ محاولة دفع فاشلة
+                    _context.Payment_Records.Add(new Payment_Records
+                    {
+                        PaymentId = req.PaymentId,
+                        UserId = req.UserId,
+                        PackageId = req.PackageId,
+                        Amount = payment.amount / 100m,
+                        Status = payment.status
+                    });
+                    await _context.SaveChangesAsync();
+
+                    return BadRequest(new { message = "Payment not paid", payment.status });
+                }
+
+                // 3️⃣ تفعيل الاشتراك
+                var package = await _context.Packages.FindAsync(req.PackageId);
+                if (package == null)
+                    return BadRequest(new { message = "Package not found" });
+
+                var subscription = new UserSubscription
+                {
+                    UserId = req.UserId,
+                    PackageId = req.PackageId,
+                    PlanName = package.Name,
+                    Price = package.Price,
+                    StartDate = DateTime.UtcNow,
+                    EndDate = DateTime.UtcNow.AddDays(package.DurationDays),
+                    PaymentStatus = "paid",
+                    IsActive = true,
+                    CreatedAt = DateTime.UtcNow,
+                };
+
+                _context.UserSubscriptions.Add(subscription);
+
+                // سجل الدفع
+                _context.Payment_Records.Add(new Payment_Records
+                {
+                    PaymentId = req.PaymentId,
+                    UserId = req.UserId,
+                    PackageId = req.PackageId,
+                    Amount = payment.amount / 100m,
+                    Status = "paid"
+                });
+
+                // زيادة عدد المشتركين
+                package.SubscriberCount += 1;
+
+                await _context.SaveChangesAsync();
+
+                // تحديث user.subscreption
+                var user = await _context.Users.FindAsync(req.UserId);
+                if (user != null)
+                {
+                    user.subscreption = subscription.Id;
+                    await _context.SaveChangesAsync();
+                }
+
+                return Ok(new { message = "Subscription activated", subscriptionId = subscription.Id });
             }
             catch (Exception ex)
             {
                 return BadRequest(new { error = ex.Message });
             }
         }
-
-        
 
     }
 }

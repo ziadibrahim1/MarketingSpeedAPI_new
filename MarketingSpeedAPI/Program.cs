@@ -4,8 +4,8 @@ using MarketingSpeedAPI.Hubs;
 using MarketingSpeedAPI.Models;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
-using System.Security.Cryptography.X509Certificates;
-using TL;
+
+ 
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -54,6 +54,21 @@ builder.Services.AddHttpClient("Wasender", client =>
     client.BaseAddress = new Uri(builder.Configuration["Wasender:BaseUrl"] ?? "https://www.wasenderapi.com");
     client.DefaultRequestHeaders.Add("Authorization", $"Bearer {builder.Configuration["Wasender:ApiKey"]}");
 });
+
+
+builder.Services.Configure<MoyasarSettings>(
+    builder.Configuration.GetSection("Moyasar"));
+
+builder.Services.AddDbContext<AppDbContext>(options =>
+{
+    options.UseMySql(
+        builder.Configuration.GetConnectionString("DefaultConnection"),
+        new MySqlServerVersion(new Version(8, 0, 26))
+    );
+});
+
+
+
 
 // 8️⃣ CORS
 builder.Services.AddCors(options =>

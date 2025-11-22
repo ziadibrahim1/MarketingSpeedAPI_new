@@ -20,6 +20,8 @@ namespace MarketingSpeedAPI.Data
         public DbSet<VideoCategory> video_categories { get; set; }
         public DbSet<Referral> Referrals { get; set; }
         public DbSet<Suggestion> Suggestions { get; set; }
+        public DbSet<Payment_Records> Payment_Records { get; set; }
+
         public DbSet<suggestion_replies> suggestion_replies { get; set; }
         public DbSet<GroupRequest> group_requests { get; set; }
         public DbSet<Category> Categories { get; set; }
@@ -38,6 +40,9 @@ namespace MarketingSpeedAPI.Data
         public DbSet<Message> Messages { get; set; } = null!;
         public DbSet<MessageLog> message_logs { get; set; } = null!;
         public DbSet<UserImage> UserImages { get; set; }
+        public DbSet<Coupon> Coupons { get; set; }
+        public DbSet<CouponUsage> CouponUsages { get; set; }
+
         public DbSet<MessageAttachment> MessageAttachments { get; set; } = null!;
         public DbSet<MarketingMessage> marketing_messages { get; set; }
         public DbSet<ChatMessage> ChatMessages { get; set; }
