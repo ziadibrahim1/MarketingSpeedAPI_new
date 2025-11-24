@@ -34,7 +34,7 @@ namespace MarketingSpeedAPI.Controllers
             if (package == null)
                 return BadRequest(new { error = "Package not found" });
 
-            decimal originalPrice = 1;
+            decimal originalPrice = package.Price;
             decimal finalPrice = originalPrice;
             int? couponId = null;
 

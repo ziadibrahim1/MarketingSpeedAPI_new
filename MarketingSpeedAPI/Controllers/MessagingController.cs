@@ -1458,6 +1458,7 @@ namespace MarketingSpeedAPI.Controllers
 
             var senderNumber = NormalizePhone(account.AccountIdentifier);
             var rand = new Random();
+
             double NormalDelay(double meanMs, double stdDevMs, double min, double max)
             {
                 double u1 = 1.0 - rand.NextDouble();
@@ -1468,7 +1469,9 @@ namespace MarketingSpeedAPI.Controllers
                 return Math.Clamp(delay, min, max);
             }
 
-            // ✅ محاولة جلب الاسم من واتساب أو توليد اسم واقعي
+            // ------------------------------------------
+            // جلب الاسم كما هو
+            // ------------------------------------------
             string contactName = string.Empty;
             try
             {
@@ -1486,15 +1489,14 @@ namespace MarketingSpeedAPI.Controllers
                                   ?? "";
                 }
             }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"⚠️ Failed to fetch contact name: {ex.Message}");
-            }
+            catch { }
 
             if (string.IsNullOrWhiteSpace(contactName))
                 contactName = GenerateRealisticName();
 
-            // ✅ إضافة الرقم إلى جهات الاتصال
+            // ------------------------------------------
+            // إضافة جهة اتصال كما هو
+            // ------------------------------------------
             try
             {
                 var contactRequest = new RestRequest("/api/contacts", Method.Put);
@@ -1509,12 +1511,13 @@ namespace MarketingSpeedAPI.Controllers
                 contactRequest.AddJsonBody(contactBody);
                 await _client.ExecuteAsync(contactRequest);
             }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"⚠️ Error saving contact: {ex.Message}");
-            }
-            // ✅ تجهيز الرسالة
+            catch { }
+
+            // ------------------------------------------
+            // تجهيز الرسالة كما هو
+            // ------------------------------------------
             var body = new Dictionary<string, object?> { { "to", NormalizePhone(req.Recipient) } };
+
             if (req.ImageUrls != null && req.ImageUrls.Any())
             {
                 var mediaUrl = req.ImageUrls.First();
@@ -1529,7 +1532,9 @@ namespace MarketingSpeedAPI.Controllers
             if (body.Count <= 1)
                 return Ok(new { success = false, blocked = false, error = "Message body and attachments are empty" });
 
-
+            // ------------------------------------------
+            // محاكاة الكتابة كما هي
+            // ------------------------------------------
             if (!string.IsNullOrEmpty(req.Message))
             {
                 try
@@ -1550,13 +1555,13 @@ namespace MarketingSpeedAPI.Controllers
                         composingReq.AddHeader("Content-Type", "application/json");
                         composingReq.AddJsonBody(new { jid, type = "composing", delayMs = (int)composingMs });
                         await _client.ExecuteAsync(composingReq);
-                        await Task.Delay(TimeSpan.FromMilliseconds(composingMs));
+                        await Task.Delay((int)composingMs);
                     }
                     else
                     {
-                        double composing1 = 3000 + rand.Next(3000);  // 3–6 ثواني
-                        double pauseMs = 1000 + rand.Next(1000);     // 1–2 ثانية
-                        double composing2 = 500 + rand.Next(1500);   // 0.5–2 ثانية
+                        double composing1 = 3000 + rand.Next(3000);
+                        double pauseMs = 1000 + rand.Next(1000);
+                        double composing2 = 500 + rand.Next(1500);
 
                         string jid = $"{NormalizePhone(req.Recipient)}@s.whatsapp.net";
 
@@ -1565,75 +1570,100 @@ namespace MarketingSpeedAPI.Controllers
                         composingReq1.AddHeader("Content-Type", "application/json");
                         composingReq1.AddJsonBody(new { jid, type = "composing", delayMs = (int)composing1 });
                         await _client.ExecuteAsync(composingReq1);
-                        await Task.Delay(TimeSpan.FromMilliseconds(composing1));
+                        await Task.Delay((int)composing1);
 
-                        await Task.Delay(TimeSpan.FromMilliseconds(pauseMs));
+                        await Task.Delay((int)pauseMs);
 
                         var composingReq2 = new RestRequest("/api/send-presence-update", Method.Post);
                         composingReq2.AddHeader("Authorization", $"Bearer {account.AccessToken}");
                         composingReq2.AddHeader("Content-Type", "application/json");
                         composingReq2.AddJsonBody(new { jid, type = "composing", delayMs = (int)composing2 });
                         await _client.ExecuteAsync(composingReq2);
-                        await Task.Delay(TimeSpan.FromMilliseconds(composing2));
+                        await Task.Delay((int)composing2);
                     }
                 }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"⚠️ Typing simulation failed: {ex.Message}");
-                }
+                catch { }
             }
 
-            // ✅ إرسال الرسالة عبر Wasender API
-            var sendReq = new RestRequest("/api/send-message", Method.Post);
-            sendReq.AddHeader("Authorization", $"Bearer {account.AccessToken}");
-            sendReq.AddHeader("Content-Type", "application/json");
-            sendReq.AddJsonBody(body);
+            // ------------------------------------------
+            // ❌ تم حذف كود Wasender
+            // ✔️ إضافة كود WHAPI للإرسال فقط
+            // ------------------------------------------
 
             bool success = false;
             bool isBlocked = false;
             string? errorMessage = null;
             string? externalId = null;
 
-            const int maxRetries = 3;
-            for (int attempt = 1; attempt <= maxRetries; attempt++)
-            {
-                var response = await _client.ExecuteAsync(sendReq);
+            var whapiClient = new RestClient(new RestClientOptions("https://gate.whapi.cloud"));
+            RestRequest sendReq;
 
-                if ((int)response.StatusCode == 429)
+            string recipient = NormalizePhone(req.Recipient);
+
+            if (req.ImageUrls != null && req.ImageUrls.Any())
+            {
+                sendReq = new RestRequest("messages/image", Method.Post);
+                sendReq.AddHeader("authorization", $"Bearer SpBp40DPYUgD0EMvzD8qrYfwRfgfKO5U");
+                sendReq.AddHeader("accept", "application/json");
+                sendReq.AddHeader("content-type", "application/json");
+
+                sendReq.AddJsonBody(new
                 {
-                    int waitSec = (int)(Math.Pow(2, attempt) * 2 + rand.Next(0, 3));
-                    await Task.Delay(waitSec * 1000);
+                    to = recipient,
+                    media = req.ImageUrls.First(),
+                    caption = req.Message
+                });
+            }
+            else
+            {
+                sendReq = new RestRequest("messages/text", Method.Post);
+                sendReq.AddHeader("authorization", $"Bearer SpBp40DPYUgD0EMvzD8qrYfwRfgfKO5U");
+                sendReq.AddHeader("accept", "application/json");
+                sendReq.AddHeader("content-type", "application/json");
+
+                sendReq.AddJsonBody(new
+                {
+                    to = recipient,
+                    body = req.Message
+                });
+            }
+
+            for (int attempt = 0; attempt < 2; attempt++)
+            {
+                var res = await whapiClient.ExecuteAsync(sendReq);
+
+                if (res.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
+                {
+                    await Task.Delay(1500);
                     continue;
                 }
 
-                success = response.IsSuccessful;
-                errorMessage = success ? null : (response.ErrorMessage ?? response.Content);
+                success = res.IsSuccessful;
+                errorMessage = success ? null : (res.ErrorMessage ?? res.Content);
 
                 if (success)
                 {
                     try
                     {
-                        externalId = JObject.Parse(response.Content)["data"]?["msgId"]?.ToString();
+                        var json = JObject.Parse(res.Content);
+                        externalId = json["message"]?["id"]?.ToString();
                     }
                     catch { }
                 }
 
-                isBlocked = !success && (
-                    errorMessage?.Contains("not found", StringComparison.OrdinalIgnoreCase) == true ||
-                    errorMessage?.Contains("forbidden", StringComparison.OrdinalIgnoreCase) == true ||
-                    errorMessage?.Contains("blocked", StringComparison.OrdinalIgnoreCase) == true
-                );
-
-                if (!success && attempt < maxRetries)
-                {
-                    await Task.Delay((int)NormalDelay(2000, 500, 1000, 4000));
-                    continue;
-                }
+                isBlocked =
+                    !success &&
+                    (
+                        (errorMessage?.Contains("Recipient_not_found", StringComparison.OrdinalIgnoreCase) ?? false) ||
+                        (errorMessage?.Contains("blocked", StringComparison.OrdinalIgnoreCase) ?? false)
+                    );
 
                 break;
             }
 
-            // ✅ تسجيل الرسالة في MessageLog مباشرة (بدون Task.Run)
+            // ------------------------------------------
+            // تسجيل الرسالة كما هو
+            // ------------------------------------------
             try
             {
                 var log = new MessageLog
@@ -1653,11 +1683,11 @@ namespace MarketingSpeedAPI.Controllers
                 _context.message_logs.Add(log);
                 await _context.SaveChangesAsync();
             }
-            catch (Exception ex)
-            {
-            }
+            catch { }
 
-            // ✅ خصم الاستخدام من جدول subscription_usage بعد الإرسال الناجح
+            // ------------------------------------------
+            // خصم الاشتراك كما هو
+            // ------------------------------------------
             if (success)
             {
                 try
@@ -1710,18 +1740,19 @@ namespace MarketingSpeedAPI.Controllers
                         }
                     }
                 }
-                catch (Exception ex)
-                {
-                }
+                catch { }
             }
 
-            // ✅ النتيجة النهائية
+            // ------------------------------------------
+            // النتيجة النهائية كما هي
+            // ------------------------------------------
             return Ok(new
             {
                 success,
                 req.MainMessageId,
                 blocked = isBlocked,
-                error = errorMessage
+                error = errorMessage,
+                externalId
             });
         }
 
