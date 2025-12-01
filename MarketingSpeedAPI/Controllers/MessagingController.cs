@@ -414,13 +414,7 @@ namespace MarketingSpeedAPI.Controllers
 
             if (account.Status != "connected")
             {
-                var deleted = await DeleteWasenderSession(account);
-                if (deleted)
-                {
-                    _context.user_accounts.Remove(account);
-                    await _context.SaveChangesAsync();
-                }
-
+                 
                 return Ok(new
                 {
                     success = true,
@@ -499,40 +493,6 @@ namespace MarketingSpeedAPI.Controllers
         }
 
 
-
-
-        private async Task<bool> DeleteWasenderSession(UserAccount account)
-        {
-            try
-            {
-                var client = new RestClient($"https://www.wasenderapi.com/api/whatsapp-sessions/{account.WasenderSessionId}");
-                var request = new RestRequest("", Method.Delete);  
-                request.AddHeader("Authorization", $"Bearer {_apiKey}");
-
-                var response = await client.ExecuteAsync(request);
-
-                if (response.StatusCode == System.Net.HttpStatusCode.NoContent)
-                {
-                    return true;
-                }
-
-                if (!string.IsNullOrEmpty(response.Content) &&
-                    response.Content.Contains("noaccount", StringComparison.OrdinalIgnoreCase))
-                {
-                    return true;
-                }
-
-
-                return false;
-            }
-            catch (Exception ex)
-            {
-                return false;
-            }
-        }
-
-
-
         [HttpGet("groups-with-members/{userId}/{platformId}")]
         public async Task<IActionResult> GetGroupsWithMembers(ulong userId, int platformId)
         {
@@ -598,37 +558,316 @@ namespace MarketingSpeedAPI.Controllers
             var account = await _context.user_accounts
                 .FirstOrDefaultAsync(a => a.UserId == (int)userId && a.PlatformId == platformId);
 
-            if (account == null || account.WasenderSessionId == null)
-                return NotFound();
+            if (account == null || string.IsNullOrEmpty(account.AccessToken))
+                return NotFound(new { success = false, message = "No active session" });
+
+            
+            var leftJids = await _context.LeftGroups
+                .Where(lg => lg.UserId == (int)userId)
+                .Select(lg => lg.GroupId)
+                .ToListAsync();
+
+            var result = new List<object>();
+
+            int offset = 0;
+            int total = 0;
+
+            do
+            {
+                var client = new RestClient($"https://gate.whapi.cloud/groups?count=500&offset={offset}");
+                var request = new RestRequest("", Method.Get);
+                request.AddHeader("accept", "application/json");
+                request.AddHeader("authorization", $"Bearer {account.AccessToken}");
+
+                var response = await client.ExecuteAsync(request);
+
+                if (!response.IsSuccessful)
+                    return StatusCode((int)response.StatusCode, response.Content);
+
+                var json = JObject.Parse(response.Content);
+
+                var groupsArray = json["groups"]?.ToArray();
+                total = json["total"]?.ToObject<int>() ?? 0;
+
+                if (groupsArray != null)
+                {
+                    foreach (var g in groupsArray)
+                    {
+                        string id = g["id"]?.ToString();
+                        string name = g["name"]?.ToString();
+                        string participantCountStr = g["participants_count"]?.ToString();
+
+                        if (string.IsNullOrEmpty(id))
+                            continue;
+
+                        // ❌ لا ترجع المجموعات التي غادرها المستخدم
+                        if (leftJids.Contains(id))
+                            continue;
+
+                        // ❌ تجاهل المجموعات من نوع Restricted + Announcements
+                        bool isRestricted = g["restricted"]?.ToObject<bool>() ?? false;
+                        bool isAnnouncements = g["announcements"]?.ToObject<bool>() ?? false;
+                        bool isCommunityAnnounce = g["isCommunityAnnounce"]?.ToObject<bool>() ?? false;
+                        bool not_spam = g["not_spam"]?.ToObject<bool>() ?? false;
+                        if (isRestricted && isAnnouncements || isCommunityAnnounce || not_spam==false)
+                            continue;
+
+                        result.Add(new
+                        {
+                            id = id,
+                            name = name,
+                            participantCount = participantCountStr != null ? int.Parse(participantCountStr) : 0
+                        });
+                    }
+                }
+
+                offset += 500;
+
+            } while (offset < total);
+
+            // إزالة التكرارات كما في الكود القديم
+            result = result
+                .GroupBy(g => g.GetType().GetProperty("id").GetValue(g))
+                .Select(g => g.First())
+                .ToList();
+
+            return Ok(result);
+        }
+
+        [HttpGet("groups-member/{userId}/{platformId}")]
+        public async Task<IActionResult> GetMemberGroups(ulong userId, int platformId)
+        {
+            var account = await _context.user_accounts
+                .FirstOrDefaultAsync(a => a.UserId == (int)userId && a.PlatformId == platformId);
+
+            if (account == null || string.IsNullOrEmpty(account.AccessToken))
+                return NotFound(new { success = false, message = "No active session" });
 
             var leftJids = await _context.LeftGroups
                 .Where(lg => lg.UserId == (int)userId)
                 .Select(lg => lg.GroupId)
                 .ToListAsync();
 
-            var groupsRequest = new RestRequest("/api/groups", Method.Get);
-            groupsRequest.AddHeader("Authorization", $"Bearer {account.AccessToken}");
-            var groupsResp = await _client.ExecuteAsync(groupsRequest);
-
-            if (!groupsResp.IsSuccessful)
-                return StatusCode((int)groupsResp.StatusCode, groupsResp.Content);
-
-            var groupsJson = JsonDocument.Parse(groupsResp.Content);
             var result = new List<object>();
 
-            if (groupsJson.RootElement.TryGetProperty("data", out var groups))
+            int offset = 0;
+            int total = 0;
+
+            do
             {
-                result = groups.EnumerateArray()
-                      
-                    .Select(g => new
+                var client = new RestClient($"https://gate.whapi.cloud/groups?count=500&offset={offset}");
+                var request = new RestRequest("", Method.Get);
+                request.AddHeader("accept", "application/json");
+                request.AddHeader("authorization", $"Bearer {account.AccessToken}");
+
+                var response = await client.ExecuteAsync(request);
+
+                if (!response.IsSuccessful)
+                    return StatusCode((int)response.StatusCode, response.Content);
+
+                var json = JObject.Parse(response.Content);
+                var groupsArray = json["groups"]?.ToArray();
+                total = json["total"]?.ToObject<int>() ?? 0;
+
+                if (groupsArray != null)
+                {
+                    foreach (var g in groupsArray)
                     {
-                        id = g.GetProperty("id").GetString(),
-                        name = g.GetProperty("name").GetString()
-                    }).GroupBy(g => g.id) 
-    .Select(g => g.First())
-    .ToList<object>()
-                    .ToList<object>();
-            }
+                        string id = g["id"]?.ToString();
+                        string name = g["name"]?.ToString();
+
+                        if (string.IsNullOrEmpty(id))
+                            continue;
+
+                        if (leftJids.Contains(id))
+                            continue;
+
+                        bool isCommunityAnnounce = g["isCommunityAnnounce"]?.ToObject<bool>() ?? false;
+                        bool not_spam = g["not_spam"]?.ToObject<bool>() ?? false;
+
+                        if (isCommunityAnnounce || not_spam==false)
+                            continue;
+
+                        // 🟦 جلب الأعضاء كما جاءت في الرد
+                        var participants = g["participants"]?.Select(p => new { id = p["id"]?.ToString(),}).Cast<object>().ToList() ?? new List<object>();
+
+
+                        result.Add(new
+                        {
+                            id = id,
+                            name = name,
+                            participants = participants ?? new List<object>()
+                        });
+                    }
+                }
+
+                offset += 500;
+
+            } while (offset < total);
+
+            // إزالة التكرارات
+            result = result
+                .GroupBy(g => g.GetType().GetProperty("id")!.GetValue(g))
+                .Select(g => g.First())
+                .ToList();
+
+            return Ok(result);
+        }
+
+        [HttpGet("channel-member/{userId}/{platformId}")]
+        public async Task<IActionResult> GetMemberchannel(ulong userId, int platformId)
+        {
+            var account = await _context.user_accounts
+                .FirstOrDefaultAsync(a => a.UserId == (int)userId && a.PlatformId == platformId);
+
+            if (account == null || string.IsNullOrEmpty(account.AccessToken))
+                return NotFound(new { success = false, message = "No active session" });
+
+            var leftJids = await _context.LeftGroups
+                .Where(lg => lg.UserId == (int)userId)
+                .Select(lg => lg.GroupId)
+                .ToListAsync();
+
+            var result = new List<object>();
+
+            int offset = 0;
+            int total = 0;
+
+            do
+            {
+                var client = new RestClient($"https://gate.whapi.cloud/groups?count=500&offset={offset}");
+                var request = new RestRequest("", Method.Get);
+                request.AddHeader("accept", "application/json");
+                request.AddHeader("authorization", $"Bearer {account.AccessToken}");
+
+                var response = await client.ExecuteAsync(request);
+
+                if (!response.IsSuccessful)
+                    return StatusCode((int)response.StatusCode, response.Content);
+
+                var json = JObject.Parse(response.Content);
+                var groupsArray = json["groups"]?.ToArray();
+                total = json["total"]?.ToObject<int>() ?? 0;
+
+                if (groupsArray != null)
+                {
+                    foreach (var g in groupsArray)
+                    {
+                        string id = g["id"]?.ToString();
+                        string name = g["name"]?.ToString();
+
+                        if (string.IsNullOrEmpty(id))
+                            continue;
+
+                        if (leftJids.Contains(id))
+                            continue;
+
+                        bool isCommunityAnnounce = g["isCommunityAnnounce"]?.ToObject<bool>() ?? false;
+                        if (!isCommunityAnnounce)
+                            continue;
+
+                        // 🟦 جلب الأعضاء كما جاءت في الرد
+                        var participants = g["participants"]?.Select(p => new { id = p["id"]?.ToString(), }) .Cast<object>() .ToList()?? new List<object>();
+
+
+                        result.Add(new
+                        {
+                            id = id,
+                            name = name,
+                            participants = participants ?? new List<object>()
+                        });
+                    }
+                }
+
+                offset += 500;
+
+            } while (offset < total);
+
+            // إزالة التكرارات
+            result = result
+                .GroupBy(g => g.GetType().GetProperty("id")!.GetValue(g))
+                .Select(g => g.First())
+                .ToList();
+
+            return Ok(result);
+        }
+
+
+        [HttpGet("groups-restricted/{userId}/{platformId}")]
+        public async Task<IActionResult> GetRestrictedAnnouncementGroups(ulong userId, int platformId)
+        {
+            var account = await _context.user_accounts
+                .FirstOrDefaultAsync(a => a.UserId == (int)userId && a.PlatformId == platformId);
+
+            if (account == null || string.IsNullOrEmpty(account.AccessToken))
+                return NotFound(new { success = false, message = "No active session" });
+
+            // المجموعات التي تركها المستخدم – يتم استبعادها
+            var leftJids = await _context.LeftGroups
+                .Where(lg => lg.UserId == (int)userId)
+                .Select(lg => lg.GroupId)
+                .ToListAsync();
+
+            var result = new List<object>();
+
+            int offset = 0;
+            int total = 0;
+
+            do
+            {
+                var client = new RestClient($"https://gate.whapi.cloud/groups?count=500&offset={offset}");
+                var request = new RestRequest("", Method.Get);
+                request.AddHeader("accept", "application/json");
+                request.AddHeader("authorization", $"Bearer {account.AccessToken}");
+
+                var response = await client.ExecuteAsync(request);
+
+                if (!response.IsSuccessful)
+                    return StatusCode((int)response.StatusCode, response.Content);
+
+                var json = JObject.Parse(response.Content);
+
+                var groupsArray = json["groups"]?.ToArray();
+                total = json["total"]?.ToObject<int>() ?? 0;
+
+                if (groupsArray != null)
+                {
+                    foreach (var g in groupsArray)
+                    {
+                        string id = g["id"]?.ToString();
+                        string name = g["name"]?.ToString();
+
+                        if (string.IsNullOrEmpty(id))
+                            continue;
+
+                        // تجاهل المجموعات التي تركها المستخدم
+                        if (leftJids.Contains(id))
+                            continue;
+
+                        // ✨ الشرط الجديد: إرجاع فقط المجموعات التي فيها الخاصيتين
+                        bool restricted = g["restricted"]?.ToObject<bool>() ?? false;
+                        bool announcements = g["announcements"]?.ToObject<bool>() ?? false;
+
+                        if (restricted && announcements)
+                        {
+                            result.Add(new
+                            {
+                                id = id,
+                                name = name
+                            });
+                        }
+                    }
+                }
+
+                offset += 500;
+
+            } while (offset < total);
+
+            // إزالة التكرار كما في دالتك الأصلية
+            result = result
+                .GroupBy(g => g.GetType().GetProperty("id").GetValue(g))
+                .Select(g => g.First())
+                .ToList();
 
             return Ok(result);
         }
@@ -640,27 +879,40 @@ namespace MarketingSpeedAPI.Controllers
             var account = await _context.user_accounts
                 .FirstOrDefaultAsync(a => a.UserId == (int)userId && a.PlatformId == platformId);
 
-            if (account == null || account.WasenderSessionId == null)
-                return NotFound();
+            if (account == null || account.AccessToken == null)
+                return NotFound(new { success = false, message = "No active WhatsApp session" });
 
-            var metaRequest = new RestRequest($"/api/groups/{groupId}/metadata", Method.Get);
-            metaRequest.AddHeader("Authorization", $"Bearer {account.AccessToken}");
-            var metaResp = await _client.ExecuteAsync(metaRequest);
+            // WHAPI endpoint
+            var options = new RestClientOptions($"https://gate.whapi.cloud/groups/{groupId}?resync=false");
+            var client = new RestClient(options);
 
-            if (!metaResp.IsSuccessful)
-                return StatusCode((int)metaResp.StatusCode, metaResp.Content);
+            var request = new RestRequest("", Method.Get);
+            request.AddHeader("accept", "application/json");
+            request.AddHeader("authorization", $"Bearer {account.AccessToken}");
 
-            var metaJson = JsonDocument.Parse(metaResp.Content);
+            var response = await client.ExecuteAsync(request);
+
+            if (!response.IsSuccessful)
+            {
+                return StatusCode((int)response.StatusCode, response.Content);
+            }
+
+            var json = JsonDocument.Parse(response.Content);
+
             int memberCount = 0;
 
-            if (metaJson.RootElement.TryGetProperty("data", out var meta) &&
-                meta.TryGetProperty("participants", out var participants))
+            if (json.RootElement.TryGetProperty("participants", out var participants))
             {
                 memberCount = participants.GetArrayLength();
             }
 
-            return Ok(new { groupId, membersCount = memberCount });
+            return Ok(new
+            {
+                groupId,
+                membersCount = memberCount
+            });
         }
+
 
         [HttpGet("groups/membersCount/{userId}/{platformId}")]
         public async Task<IActionResult> GetGroupsMembersCount(ulong userId, int platformId)
@@ -738,81 +990,53 @@ namespace MarketingSpeedAPI.Controllers
             var account = await _context.user_accounts
                 .FirstOrDefaultAsync(a => a.UserId == (int)userId && a.PlatformId == 1);
 
-            if (account == null || account.WasenderSessionId == null)
+            if (account == null || string.IsNullOrEmpty(account.AccessToken))
                 return NotFound(new { success = false, message = "No active WhatsApp session" });
 
-            var request = new RestRequest($"/api/groups/{groupJid}/participants", Method.Get);
-            request.AddHeader("Authorization", $"Bearer {account.AccessToken}");
+            // WHAPI Endpoint
+            var options = new RestClientOptions($"https://gate.whapi.cloud/groups/{groupJid}?resync=true");
+            var client = new RestClient(options);
 
-            async Task<RestResponse> ExecuteWithRetryAsync()
-            {
-                var resp = await _client.ExecuteAsync(request);
+            var request = new RestRequest("", Method.Get);
+            request.AddHeader("accept", "application/json");
+            request.AddHeader("authorization", $"Bearer {account.AccessToken}");
 
-                if ((int)resp.StatusCode == 429)  
-                {
-                    try
-                    {
-                        using var json = JsonDocument.Parse(resp.Content);
-                        if (json.RootElement.TryGetProperty("retry_after", out var retryProp))
-                        {
-                            int retryAfter = retryProp.GetInt32();
-                            await Task.Delay(retryAfter * 1000);  
-                            resp = await _client.ExecuteAsync(request); 
-                        }
-                    }
-                    catch
-                    {
-                        using var json = JsonDocument.Parse(resp.Content);
-                        if (json.RootElement.TryGetProperty("retry_after", out var retryProp))
-                        {
-                            int retryAfter = retryProp.GetInt32();
-                            await Task.Delay(retryAfter * 1000);  
-                            resp = await _client.ExecuteAsync(request);  
-                        }
-                    }
-                }
+            // تنفيذ الطلب
+            var response = await client.ExecuteAsync(request);
 
-                return resp;
-            }
-
-            var respFinal = await ExecuteWithRetryAsync();
-
-            if (!respFinal.IsSuccessful)
-                return StatusCode((int)respFinal.StatusCode, respFinal.Content);
+            if (!response.IsSuccessful)
+                return StatusCode((int)response.StatusCode, response.Content);
 
             var membersList = new List<object>();
-            var membersJson = JsonDocument.Parse(respFinal.Content);
 
-            if (membersJson.RootElement.TryGetProperty("data", out var members))
+            using var json = JsonDocument.Parse(response.Content);
+
+            // WHAPI: participants[]
+            if (json.RootElement.TryGetProperty("participants", out var participants))
             {
-                foreach (var m in members.EnumerateArray())
+                foreach (var p in participants.EnumerateArray())
                 {
-                    string phoneNumber = null;
-                    var id = m.GetProperty("id").GetString();
-                    if (m.TryGetProperty("jid", out var jidProp))
-                        phoneNumber = jidProp.GetString();
-                    else if (m.TryGetProperty("phoneNumber", out var phoneProp))
-                        phoneNumber = phoneProp.GetString();
-                    var admin = m.TryGetProperty("admin", out var adminProp) && adminProp.ValueKind != JsonValueKind.Null
-                                ? adminProp.GetString()
-                                : null;
+                    string id = p.GetProperty("id").GetString();   // رقم بدون @
+                    string rank = p.TryGetProperty("rank", out var r) ? r.GetString() : null;
 
-                   
-                    var numberOnly = phoneNumber?.Split('@')[0];
-                    if (!string.IsNullOrWhiteSpace(numberOnly))
+                    // عمل JID مثل النظام القديم
+                    string jid = $"{id}@g.us";
+
+                    membersList.Add(new
                     {
-                        membersList.Add(new
-                        {
-                            Number = numberOnly,
-                            Id = id,
-                            Jid = phoneNumber,
-                            Admin = admin
-                        });
-                    }
+                        Number = id,
+                        Id = id,
+                        Jid = jid,
+                        Admin = rank // "admin" أو "member"
+                    });
                 }
             }
 
-            return Ok(new { success = true, data = membersList });
+            return Ok(new
+            {
+                success = true,
+                data = membersList
+            });
         }
 
 
@@ -847,93 +1071,72 @@ namespace MarketingSpeedAPI.Controllers
 
             try
             {
-                var request = new RestRequest($"/api/contacts", Method.Get);
-                request.AddHeader("Authorization", $"Bearer {account.AccessToken}");
-
-                var response = await _client.ExecuteAsync(request);
-
-                if (!response.IsSuccessful || string.IsNullOrEmpty(response.Content))
-                    return Ok(new { success = false, message = "Failed to fetch contacts from Wasender" });
-
-                var root = JsonDocument.Parse(response.Content).RootElement;
-
-                JsonElement arrayElement = default;
-                bool haveArray = false;
-
-                if (root.ValueKind == JsonValueKind.Array)
-                {
-                    arrayElement = root;
-                    haveArray = true;
-                }
-                else if (root.TryGetProperty("data", out var dataProp))
-                {
-                    if (dataProp.ValueKind == JsonValueKind.Array)
-                    {
-                        arrayElement = dataProp;
-                        haveArray = true;
-                    }
-                    else if (dataProp.ValueKind == JsonValueKind.Object &&
-                             dataProp.TryGetProperty("data", out var innerData) &&
-                             innerData.ValueKind == JsonValueKind.Array)
-                    {
-                        arrayElement = innerData;
-                        haveArray = true;
-                    }
-                }
-
-                if (!haveArray)
-                {
-                    return Ok(new { success = true, message = "Chats fetched successfully", data = Array.Empty<object>() });
-                }
-
+                // قائمة الأكواد العربية المسموح بها
                 var allowedPrefixes = new List<string>
-{
-    "20",   // مصر
-    "966",  // السعودية
-    "971",  // الإمارات
-    "974",  // قطر
-    "973",  // البحرين
-    "965",  // الكويت
-    "968",  // عمان
-    "967",  // اليمن
-    "962",  // الأردن
-    "961",  // لبنان
-    "963",  // سوريا
-    "964",  // العراق
-    "970",  // فلسطين
-    "249",  // السودان
-    "218",  // ليبيا
-    "213",  // الجزائر
-    "212",  // المغرب
-    "216",  // تونس
-    "222",  // موريتانيا
-    "252",  // الصومال
-    "253",  // جيبوتي
-    "269"   // جزر القمر
-};
+        {
+            "20","966","971","974","973","965","968","967","962",
+            "961","963","964","970","249","218","213","212","216",
+            "222","252","253","269"
+        };
 
+                var collectedChats = new List<JsonElement>();
+                int offset = 0;
+                int limit = 500;
 
+                while (true)
+                {
+                    var restClient = new RestClient($"https://gate.whapi.cloud/chats?count={limit}&offset={offset}");
+                    var request = new RestRequest("", Method.Get);
+                    request.AddHeader("accept", "application/json");
+                    request.AddHeader("authorization", $"Bearer {account.AccessToken}");
+
+                    var response = await restClient.ExecuteAsync(request);
+
+                    if (!response.IsSuccessful)
+                        break;
+
+                    var json = JsonDocument.Parse(response.Content);
+
+                    if (!json.RootElement.TryGetProperty("chats", out var chatsArray) ||
+                        chatsArray.ValueKind != JsonValueKind.Array)
+                        break;
+
+                    // إضافة chats من النوع contact فقط
+                    foreach (var item in chatsArray.EnumerateArray())
+                    {
+                        if (item.TryGetProperty("type", out var typeProp) &&
+                            typeProp.GetString() == "contact")
+                        {
+                            collectedChats.Add(item);
+                        }
+                    }
+
+                    // التوقف إذا وصلنا للنهاية
+                    int count = json.RootElement.GetProperty("count").GetInt32();
+                    int total = json.RootElement.GetProperty("total").GetInt32();
+
+                    offset += count;
+
+                    if (offset >= total)
+                        break;
+                }
+
+                // فلترة الدردشات بنفس منطقك القديم
                 var validChats = new List<JsonElement>();
 
-                foreach (var item in arrayElement.EnumerateArray())
+                foreach (var item in collectedChats)
                 {
-                    string? rawJid = null;
-                    if (item.TryGetProperty("jid", out var jidProp) && jidProp.ValueKind == JsonValueKind.String)
-                        rawJid = jidProp.GetString();
-                    else if (item.TryGetProperty("id", out var idProp) && idProp.ValueKind == JsonValueKind.String)
-                        rawJid = idProp.GetString();
+                    if (!item.TryGetProperty("id", out var idProp)) continue;
 
-                    if (string.IsNullOrEmpty(rawJid))
-                        continue;
+                    var rawJid = idProp.GetString();
+                    if (string.IsNullOrEmpty(rawJid)) continue;
 
+                    // استخراج رقم الهاتف
                     var phonePart = rawJid.Contains('@')
                         ? rawJid.Substring(0, rawJid.IndexOf('@'))
                         : rawJid;
 
                     var clean = new string(phonePart.Where(char.IsDigit).ToArray());
-
-                    if (string.IsNullOrEmpty(clean)) continue;
-                    if (!clean.All(char.IsDigit)) continue;
                     if (clean.Length < 8 || clean.Length > 15) continue;
 
                     if (!allowedPrefixes.Any(prefix => clean.StartsWith(prefix)))
@@ -942,12 +1145,106 @@ namespace MarketingSpeedAPI.Controllers
                     validChats.Add(item);
                 }
 
-
                 return Ok(new
                 {
                     success = true,
                     message = "Chats fetched successfully",
                     data = validChats
+                });
+            }
+            catch (Exception ex)
+            {
+                return Ok(new { success = false, message = "Error fetching chats", error = ex.Message });
+            }
+        }
+
+        [HttpGet("get-personal-chats/{userId}")]
+        public async Task<IActionResult> GetPersonalChats(long userId)
+        {
+            var account = await _context.user_accounts
+                .FirstOrDefaultAsync(a => a.UserId == (int)userId && a.PlatformId == 1 && a.Status == "connected");
+
+            if (account == null)
+                return Ok(new { success = false, message = "No connected account found" });
+
+            try
+            {
+                // الأكواد العربية فقط — كما طلبت
+                var allowedPrefixes = new List<string>
+        {
+            "20","966","971","974","973","965","968","967","962",
+            "961","963","964","970","249","218","213","212","216",
+            "222","252","253","269"
+        };
+
+                var contactsList = new List<object>();
+
+                int offset = 0;
+                int limit = 300;
+
+                while (true)
+                {
+                    var client = new RestClient($"https://gate.whapi.cloud/chats?count={limit}&offset={offset}");
+                    var request = new RestRequest("", Method.Get);
+                    request.AddHeader("accept", "application/json");
+                    request.AddHeader("authorization", $"Bearer {account.AccessToken}");
+
+                    var response = await client.ExecuteAsync(request);
+
+                    if (!response.IsSuccessful)
+                        break;
+
+                    var json = JsonDocument.Parse(response.Content);
+
+                    if (!json.RootElement.TryGetProperty("chats", out var chatsArray) ||
+                        chatsArray.ValueKind != JsonValueKind.Array)
+                        break;
+
+                    foreach (var item in chatsArray.EnumerateArray())
+                    {
+                        if (!item.TryGetProperty("type", out var typeProp)) continue;
+
+                        // 🔥 فلترة الدردشات الفردية فقط
+                        if (typeProp.GetString() != "contact") continue;
+
+                        if (!item.TryGetProperty("id", out var idProp)) continue;
+
+                        string jid = idProp.GetString();
+                        if (string.IsNullOrEmpty(jid)) continue;
+
+                        string number = jid.Split('@')[0];
+                        number = new string(number.Where(char.IsDigit).ToArray());
+
+                        if (number.Length < 8 || number.Length > 15) continue;
+
+                        if (!allowedPrefixes.Any(p => number.StartsWith(p)))
+                            continue;
+
+                        string name = "";
+                        if (item.TryGetProperty("name", out var nameProp))
+                        {
+                            name = nameProp.GetString() ?? "";
+                        }
+
+                        contactsList.Add(new
+                        {
+                            phone = number,
+                            name = name,
+                            jid = jid
+                        });
+                    }
+
+                    int count = json.RootElement.GetProperty("count").GetInt32();
+                    int total = json.RootElement.GetProperty("total").GetInt32();
+                    offset += count;
+                    if (offset >= total) break;
+                }
+
+                return Ok(new
+                {
+                    success = true,
+                    message = "Chats fetched successfully",
+                    data = contactsList
                 });
             }
             catch (Exception ex)
@@ -1160,8 +1457,7 @@ namespace MarketingSpeedAPI.Controllers
             });
         }
 
-        
-        
+
         [HttpPost("block-chats/{userId}")]
         public async Task<IActionResult> BlockChats(long userId, [FromBody] List<string> phones)
         {
@@ -1169,7 +1465,9 @@ namespace MarketingSpeedAPI.Controllers
                 return BadRequest(new { success = false, message = "No phones provided" });
 
             var account = await _context.user_accounts
-                .FirstOrDefaultAsync(a => a.UserId == (int)userId && a.PlatformId == 1 && a.Status == "connected");
+                .FirstOrDefaultAsync(a => a.UserId == (int)userId &&
+                                          a.PlatformId == 1 &&
+                                          a.Status == "connected");
 
             if (account == null)
                 return Ok(new { success = false, message = "No connected account found" });
@@ -1180,16 +1478,21 @@ namespace MarketingSpeedAPI.Controllers
             {
                 try
                 {
-                    var request = new RestRequest($"/api/contacts/{phone}/block", Method.Post);
-                    request.AddHeader("Authorization", $"Bearer {account.AccessToken}");
+                    // 🔥 WHAPI — النظام الجديد
+                    var client = new RestClient($"https://gate.whapi.cloud/blacklist/{phone}");
+                    var request = new RestRequest("", Method.Put);
+                    request.AddHeader("accept", "application/json");
+                    request.AddHeader("authorization", $"Bearer {account.AccessToken}");
 
-                    var response = await _client.ExecuteAsync(request);
+                    var response = await client.ExecuteAsync(request);
 
                     if (!response.IsSuccessful)
                     {
                         results.Add(new { phone, success = false, error = response.Content });
                         continue;
                     }
+
+                    // 🟩 حفظ في blocked_chats كما هو بدون تعديل
                     var exists = await _context.blocked_chats
                         .AnyAsync(b => b.UserId == userId && b.Phone == phone);
 
@@ -1201,8 +1504,8 @@ namespace MarketingSpeedAPI.Controllers
                             Phone = phone,
                             CreatedAt = DateTime.Now,
                             UpdatedAt = DateTime.Now
-
                         };
+
                         _context.blocked_chats.Add(blocked);
                         await _context.SaveChangesAsync();
                     }
@@ -1224,47 +1527,130 @@ namespace MarketingSpeedAPI.Controllers
         }
 
 
-        [HttpPost("unblock-chat/{userId}")] 
+        [HttpPost("unblock-chat/{userId}")]
         public async Task<IActionResult> UnblockChat(long userId, [FromBody] BlockedChat req)
         {
             var phone = req.Phone;
 
             var account = await _context.user_accounts
-                .FirstOrDefaultAsync(a => a.UserId == (int)userId && a.PlatformId == 1 && a.Status == "connected");
+                .FirstOrDefaultAsync(a =>
+                    a.UserId == (int)userId &&
+                    a.PlatformId == 1 &&
+                    a.Status == "connected");
 
             if (account == null)
                 return Ok(new { success = false, message = "No connected account found" });
 
-            var request = new RestRequest($"/api/contacts/{phone}/unblock", Method.Post);
-            request.AddHeader("Authorization", $"Bearer {account.AccessToken}");
-
-            var response = await _client.ExecuteAsync(request);
-
-            if (!response.IsSuccessful)
-                return Ok(new { success = false, message = "Failed to unblock", error = response.Content });
-
-            var blocked = await _context.blocked_chats
-                .FirstOrDefaultAsync(b => b.UserId == userId && b.Phone == phone);
-
-            if (blocked != null)
+            try
             {
-                _context.blocked_chats.Remove(blocked);
-                await _context.SaveChangesAsync();
-            }
+                // 🔥 WHAPI — endpoint الجديد
+                var client = new RestClient($"https://gate.whapi.cloud/blacklist/{phone}");
+                var request = new RestRequest("", Method.Delete);
 
-            return Ok(new { success = true, message = "Chat unblocked successfully" });
+                request.AddHeader("accept", "application/json");
+                request.AddHeader("authorization", $"Bearer {account.AccessToken}");
+
+                var response = await client.DeleteAsync(request);
+
+                if (response == null || !response.IsSuccessful)
+                {
+                    return Ok(new
+                    {
+                        success = false,
+                        message = "Failed to unblock",
+                        error = response?.Content
+                    });
+                }
+
+                // 🗑 حذف من قاعدة البيانات كما هو
+                var blocked = await _context.blocked_chats
+                    .FirstOrDefaultAsync(b => b.UserId == userId && b.Phone == phone);
+
+                if (blocked != null)
+                {
+                    _context.blocked_chats.Remove(blocked);
+                    await _context.SaveChangesAsync();
+                }
+
+                return Ok(new { success = true, message = "Chat unblocked successfully" });
+            }
+            catch (Exception ex)
+            {
+                return Ok(new
+                {
+                    success = false,
+                    message = "Exception occurred",
+                    error = ex.Message
+                });
+            }
         }
+
 
         [HttpGet("blocked-chats/{userId}")]
         public async Task<IActionResult> GetBlockedChats(long userId)
         {
-            var blocked = await _context.blocked_chats
+            // 1️⃣ اجلب بيانات المستخدم للحصول على التوكن
+            var account = await _context.user_accounts
+                .FirstOrDefaultAsync(a => a.UserId == userId &&
+                                          a.PlatformId == 1 &&
+                                          a.Status == "connected");
+
+            if (account == null)
+                return Ok(new { success = false, message = "No connected account found" });
+
+            // 2️⃣ استعلام WHAPI
+            var client = new RestClient("https://gate.whapi.cloud/blacklist");
+            var request = new RestRequest("", Method.Get);
+
+            request.AddHeader("accept", "application/json");
+            request.AddHeader("authorization", $"Bearer {account.AccessToken}");
+
+            var response = await client.ExecuteAsync(request);
+
+            if (!response.IsSuccessful)
+            {
+                return StatusCode((int)response.StatusCode,
+                    new { success = false, message = "Failed to fetch blacklist", details = response.Content });
+            }
+
+            // 3️⃣ فك الرد من WHAPI
+            List<string>? whapiBlockedNumbers;
+            try
+            {
+                whapiBlockedNumbers = System.Text.Json.JsonSerializer.Deserialize<List<string>>(response.Content!);
+            }
+            catch
+            {
+                whapiBlockedNumbers = new List<string>();
+            }
+
+            // 4️⃣ هات الموجود فعلاً في قاعدة البيانات (للتواريخ فقط)
+            var dbBlocked = await _context.blocked_chats
                 .Where(b => b.UserId == userId)
-                .Select(b => new { b.Phone, b.CreatedAt,b.UpdatedAt,b.UserId,b.Id})
                 .ToListAsync();
 
-            return Ok(new { success = true, data = blocked });
+            // 5️⃣ دمج WHAPI + DB في الشكل القديم
+            var finalList = whapiBlockedNumbers.Select(phone =>
+            {
+                var dbEntry = dbBlocked.FirstOrDefault(b => b.Phone == phone);
+
+                return new
+                {
+                    Phone = phone,
+                    UserId = userId,
+                    Id = dbEntry?.Id ?? 0, // أو 0 لو مفيش
+                    CreatedAt = dbEntry?.CreatedAt ?? DateTime.UtcNow,
+                    UpdatedAt = dbEntry?.UpdatedAt ?? DateTime.UtcNow
+                };
+            }).ToList();
+
+            return Ok(new
+            {
+                success = true,
+                data = finalList
+            });
         }
+
 
         [HttpPost("send-to-single-group/{userId}")]
         public async Task<IActionResult> SendToSingleGroup(ulong userId, [FromBody] SendSingleGroupRequest req)
@@ -1278,50 +1664,85 @@ namespace MarketingSpeedAPI.Controllers
             if (account == null)
                 return Ok(new { success = false, blocked = false, error = "No connected account found" });
 
-            // ✅ تجهيز الرسالة
+            // نص الرسالة – spin syntax
             string? finalText = !string.IsNullOrWhiteSpace(req.Message) ? SpinText(req.Message) : null;
-            var body = new Dictionary<string, object?> { { "to", req.GroupId } };
 
             bool hasAttachment = req.ImageUrls != null && req.ImageUrls.Any();
+            string endpoint = "";
+            Dictionary<string, object?> body = new();
+
+            body["to"] = req.GroupId; // group id in WHAPI
+
+            // ========= تحديد نوع الرسالة حسب الملفات ===========
             if (hasAttachment)
             {
-                var mediaUrl = req.ImageUrls.First();
-                body[GetMessageTypeFromExtension(mediaUrl)] = mediaUrl;
-                if (finalText != null) body["text"] = finalText;
+                string mediaUrl = req.ImageUrls.First();
+                string ext = Path.GetExtension(mediaUrl).ToLower();
+
+                if (ext == ".jpg" || ext == ".jpeg" || ext == ".png")
+                {
+                    endpoint = "messages/image";
+                    body["image"] = mediaUrl;
+                    if (finalText != null) body["caption"] = finalText;
+                }
+                else if (ext == ".mp4")
+                {
+                    endpoint = "messages/video";
+                    body["video"] = mediaUrl;
+                    if (finalText != null) body["caption"] = finalText;
+                }
+                else if (ext == ".pdf" || ext == ".docx")
+                {
+                    endpoint = "messages/document";
+                    body["document"] = mediaUrl;
+                    if (finalText != null) body["caption"] = finalText;
+                }
+                else
+                {
+                    // fallback text only
+                    endpoint = "messages/text";
+                    body["body"] = finalText ?? "";
+                }
             }
-            else if (finalText != null)
+            else
             {
-                body["text"] = finalText;
+                endpoint = "messages/text";
+                body["body"] = finalText ?? "";
             }
 
-            if (body.Count <= 1)
-                return Ok(new { success = false, blocked = false, error = "Message body and attachments are empty" });
+            // ================= إرسال الرسالة =======================
+            var client = new RestClient("https://gate.whapi.cloud/");
+            var request = new RestRequest(endpoint, Method.Post);
 
-            // ✅ إرسال الرسالة فعليًا
-            var request = new RestRequest("/api/send-message", Method.Post);
-            request.AddHeader("Authorization", $"Bearer {account.AccessToken}");
-            request.AddHeader("Content-Type", "application/json");
+            request.AddHeader("accept", "application/json");
+            request.AddHeader("authorization", $"Bearer {account.AccessToken}");
             request.AddJsonBody(body);
 
-            var response = await _client.ExecuteAsync(request);
+            var response = await client.ExecuteAsync(request);
             bool success = response.IsSuccessful;
             string? errorMessage = success ? null : (response.ErrorMessage ?? response.Content);
 
+            // WHAPI لا يعيد msgId ثابت، لكن نحاول نقرأه لو موجود
+            string? externalId = null;
+            try
+            {
+                if (!string.IsNullOrEmpty(response.Content))
+                {
+                    var json = JObject.Parse(response.Content);
+                    externalId = json["id"]?.ToString();
+                }
+            }
+            catch { }
+
+            // ======== فحص إن المجموعة محظورة ===========
             bool isBlocked = !success && (
-                errorMessage?.Contains("group not found", StringComparison.OrdinalIgnoreCase) == true ||
                 errorMessage?.Contains("not a participant", StringComparison.OrdinalIgnoreCase) == true ||
                 errorMessage?.Contains("forbidden", StringComparison.OrdinalIgnoreCase) == true
             );
 
-            // ✅ تسجيل السجل في MessageLog مباشرة (بدون Task.Run)
+            // ======== تسجيل اللوج ================
             try
             {
-                string? externalId = null;
-                if (success && !string.IsNullOrEmpty(response.Content))
-                {
-                    try { externalId = JObject.Parse(response.Content)["data"]?["msgId"]?.ToString(); } catch { }
-                }
-
                 var log = new MessageLog
                 {
                     UserId = (int)userId,
@@ -1338,7 +1759,6 @@ namespace MarketingSpeedAPI.Controllers
 
                 _context.message_logs.Add(log);
 
-                // ✅ لو المجموعة محظورة نسجلها
                 if (isBlocked)
                 {
                     bool exists = await _context.BlockedGroups
@@ -1357,11 +1777,9 @@ namespace MarketingSpeedAPI.Controllers
 
                 await _context.SaveChangesAsync();
             }
-            catch (Exception ex)
-            {
-            }
+            catch { }
 
-            // ✅ خصم الاستخدام (لـ forGetingGroups أو forCreatingGroups)
+            // ======== خصم الاستخدام (نفس النظام القديم) ===========
             if (success)
             {
                 try
@@ -1377,12 +1795,10 @@ namespace MarketingSpeedAPI.Controllers
 
                     foreach (var sub in activeSubs)
                     {
-                        // 🔹 البحث عن الميزة الخاصة بالإرسال على المجموعات
                         var feature = await _context.PackageFeatures
                             .FirstOrDefaultAsync(f => f.PackageId == sub.PackageId && f.forGetingGruops == true);
 
-                        if (feature == null)
-                            continue;
+                        if (feature == null) continue;
 
                         var usage = await _context.subscription_usage
                             .FirstOrDefaultAsync(u => u.UserId == (int)userId &&
@@ -1415,9 +1831,7 @@ namespace MarketingSpeedAPI.Controllers
                         }
                     }
                 }
-                catch (Exception ex)
-                {
-                }
+                catch { }
             }
 
             return Ok(new { success, blocked = isBlocked });
@@ -1457,65 +1871,6 @@ namespace MarketingSpeedAPI.Controllers
                 return Ok(new { success = false, blocked = false, error = "Recipient number matches sender" });
 
             var senderNumber = NormalizePhone(account.AccountIdentifier);
-            var rand = new Random();
-
-            double NormalDelay(double meanMs, double stdDevMs, double min, double max)
-            {
-                double u1 = 1.0 - rand.NextDouble();
-                double u2 = 1.0 - rand.NextDouble();
-                double randStdNormal = Math.Sqrt(-2.0 * Math.Log(u1)) * Math.Sin(2.0 * Math.PI * u2);
-                double delay = meanMs + stdDevMs * randStdNormal;
-                delay += rand.NextDouble() * 600 - 300;
-                return Math.Clamp(delay, min, max);
-            }
-
-            // ------------------------------------------
-            // جلب الاسم كما هو
-            // ------------------------------------------
-            string contactName = string.Empty;
-            try
-            {
-                var cleanNumber = NormalizePhone(req.Recipient);
-                var getRequest = new RestRequest($"/api/contacts/{cleanNumber}", Method.Get);
-                getRequest.AddHeader("Authorization", $"Bearer {account.AccessToken}");
-                var getResponse = await _client.ExecuteAsync(getRequest);
-
-                if (getResponse.IsSuccessful)
-                {
-                    var data = JObject.Parse(getResponse.Content);
-                    contactName = data["data"]?["name"]?.ToString()
-                                  ?? data["data"]?["notify"]?.ToString()
-                                  ?? data["data"]?["verifiedName"]?.ToString()
-                                  ?? "";
-                }
-            }
-            catch { }
-
-            if (string.IsNullOrWhiteSpace(contactName))
-                contactName = GenerateRealisticName();
-
-            // ------------------------------------------
-            // إضافة جهة اتصال كما هو
-            // ------------------------------------------
-            try
-            {
-                var contactRequest = new RestRequest("/api/contacts", Method.Put);
-                contactRequest.AddHeader("Authorization", $"Bearer {account.AccessToken}");
-                contactRequest.AddHeader("Content-Type", "application/json");
-                var contactBody = new
-                {
-                    jid = $"{NormalizePhone(req.Recipient)}@s.whatsapp.net",
-                    fullName = contactName,
-                    saveOnPrimaryAddressbook = true
-                };
-                contactRequest.AddJsonBody(contactBody);
-                await _client.ExecuteAsync(contactRequest);
-            }
-            catch { }
-
-            // ------------------------------------------
-            // تجهيز الرسالة كما هو
-            // ------------------------------------------
             var body = new Dictionary<string, object?> { { "to", NormalizePhone(req.Recipient) } };
 
             if (req.ImageUrls != null && req.ImageUrls.Any())
@@ -1531,65 +1886,7 @@ namespace MarketingSpeedAPI.Controllers
 
             if (body.Count <= 1)
                 return Ok(new { success = false, blocked = false, error = "Message body and attachments are empty" });
-
-            // ------------------------------------------
-            // محاكاة الكتابة كما هي
-            // ------------------------------------------
-            if (!string.IsNullOrEmpty(req.Message))
-            {
-                try
-                {
-                    bool skipComposing = rand.Next(100) < 10;
-                    bool hasImage = req.ImageUrls != null && req.ImageUrls.Any();
-
-                    if (skipComposing)
-                    {
-                        await Task.Delay(500);
-                    }
-                    else if (hasImage)
-                    {
-                        double composingMs = 800 + rand.Next(800);
-                        string jid = $"{NormalizePhone(req.Recipient)}@s.whatsapp.net";
-                        var composingReq = new RestRequest("/api/send-presence-update", Method.Post);
-                        composingReq.AddHeader("Authorization", $"Bearer {account.AccessToken}");
-                        composingReq.AddHeader("Content-Type", "application/json");
-                        composingReq.AddJsonBody(new { jid, type = "composing", delayMs = (int)composingMs });
-                        await _client.ExecuteAsync(composingReq);
-                        await Task.Delay((int)composingMs);
-                    }
-                    else
-                    {
-                        double composing1 = 3000 + rand.Next(3000);
-                        double pauseMs = 1000 + rand.Next(1000);
-                        double composing2 = 500 + rand.Next(1500);
-
-                        string jid = $"{NormalizePhone(req.Recipient)}@s.whatsapp.net";
-
-                        var composingReq1 = new RestRequest("/api/send-presence-update", Method.Post);
-                        composingReq1.AddHeader("Authorization", $"Bearer {account.AccessToken}");
-                        composingReq1.AddHeader("Content-Type", "application/json");
-                        composingReq1.AddJsonBody(new { jid, type = "composing", delayMs = (int)composing1 });
-                        await _client.ExecuteAsync(composingReq1);
-                        await Task.Delay((int)composing1);
-
-                        await Task.Delay((int)pauseMs);
-
-                        var composingReq2 = new RestRequest("/api/send-presence-update", Method.Post);
-                        composingReq2.AddHeader("Authorization", $"Bearer {account.AccessToken}");
-                        composingReq2.AddHeader("Content-Type", "application/json");
-                        composingReq2.AddJsonBody(new { jid, type = "composing", delayMs = (int)composing2 });
-                        await _client.ExecuteAsync(composingReq2);
-                        await Task.Delay((int)composing2);
-                    }
-                }
-                catch { }
-            }
-
-            // ------------------------------------------
-            // ❌ تم حذف كود Wasender
-            // ✔️ إضافة كود WHAPI للإرسال فقط
-            // ------------------------------------------
-
+             
             bool success = false;
             bool isBlocked = false;
             string? errorMessage = null;
@@ -1617,7 +1914,7 @@ namespace MarketingSpeedAPI.Controllers
             else
             {
                 sendReq = new RestRequest("messages/text", Method.Post);
-                sendReq.AddHeader("authorization", $"Bearer SpBp40DPYUgD0EMvzD8qrYfwRfgfKO5U");
+                sendReq.AddHeader("authorization", $"Bearer {account.AccessToken}");
                 sendReq.AddHeader("accept", "application/json");
                 sendReq.AddHeader("content-type", "application/json");
 
@@ -1634,7 +1931,7 @@ namespace MarketingSpeedAPI.Controllers
 
                 if (res.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
                 {
-                    await Task.Delay(1500);
+                    await Task.Delay(3500);
                     continue;
                 }
 
@@ -1661,9 +1958,7 @@ namespace MarketingSpeedAPI.Controllers
                 break;
             }
 
-            // ------------------------------------------
-            // تسجيل الرسالة كما هو
-            // ------------------------------------------
+            
             try
             {
                 var log = new MessageLog
@@ -1685,9 +1980,6 @@ namespace MarketingSpeedAPI.Controllers
             }
             catch { }
 
-            // ------------------------------------------
-            // خصم الاشتراك كما هو
-            // ------------------------------------------
             if (success)
             {
                 try
@@ -1757,69 +2049,6 @@ namespace MarketingSpeedAPI.Controllers
         }
 
 
-        // ----------------- دعم الأسماء الواقعية -----------------
-
-        private string GenerateRealisticName()
-        {
-            var rand = new Random();
-
-            string[] arabicFirst = { "زياد", "خالد", "أحمد", "سارة", "نور", "رنا", "ليلى", "عمرو", "نادر", "يوسف", "هاني", "إيمان", "منى", "فاطمة", "رامي", "حسام", "نجلاء", "مراد", "باسم", "أمل" };
-            string[] arabicLast = { "العتيبي", "الأنصاري", "الشريف", "الهاشمي", "القحطاني", "المصري", "الفاضل", "الزيدي", "الحسيني", "الخطيب", "العوضي", "المنصوري", "السيد", "الزهراني", "البغدادي" };
-
-            string[] turkishFirst = { "Ahmet", "Mehmet", "Elif", "Zeynep", "Yusuf", "Emre", "Ayşe", "Fatma", "Can", "Eren", "Selin", "Burak", "Merve", "Deniz", "Okan", "Melisa", "Seda" };
-            string[] turkishLast = { "Demir", "Kaya", "Çelik", "Şahin", "Aydın", "Yıldız", "Polat", "Arslan", "Koç", "Öztürk", "Doğan", "Yalçın", "Güneş" };
-
-            string[] englishFirst = { "Adam", "Olivia", "Noah", "Emma", "Liam", "Sophia", "James", "Ava", "Ethan", "Mia", "Daniel", "Ella", "Logan", "Isabella", "Lucas", "Chloe" };
-            string[] englishLast = { "Smith", "Johnson", "Brown", "Jones", "Williams", "Miller", "Taylor", "Wilson", "Anderson", "Thomas", "Jackson", "White" };
-
-            int lang = rand.Next(3);
-            string first, last;
-            if (lang == 0)
-            {
-                first = arabicFirst[rand.Next(arabicFirst.Length)];
-                last = arabicLast[rand.Next(arabicLast.Length)];
-            }
-            else if (lang == 1)
-            {
-                first = turkishFirst[rand.Next(turkishFirst.Length)];
-                last = turkishLast[rand.Next(turkishLast.Length)];
-            }
-            else
-            {
-                first = englishFirst[rand.Next(englishFirst.Length)];
-                last = englishLast[rand.Next(englishLast.Length)];
-            }
-
-            string uniqueSuffix;
-            lock (_suffixLock)
-            {
-                do
-                {
-                    uniqueSuffix = new string(Enumerable.Repeat("abcdefghijklmnopqrstuvwxyz", 3)
-                        .Select(s => s[rand.Next(s.Length)]).ToArray());
-                }
-                while (_usedSuffixes.Contains(uniqueSuffix));
-                _usedSuffixes.Add(uniqueSuffix);
-            }
-
-            string[] templates = new[]
-            {
-        $"{first} {last}",
-        $"{first} {uniqueSuffix}",
-        $"{first} {last} {uniqueSuffix}",
-        $"{first}-{last}",
-        $"{first}_{last}",
-        $"{first} {last.Substring(0,1).ToUpper()}.",
-        $"{first} {uniqueSuffix.ToUpper()}",
-        $"{last} {first}"
-    };
-
-            string fullName = templates[rand.Next(templates.Length)];
-            string[] optionalPrefixes = { "", "", "+90 ", "+20 ", "+966 ", "Mr. ", "Ms. ", "" };
-            fullName = optionalPrefixes[rand.Next(optionalPrefixes.Length)] + fullName;
-
-            return fullName.Trim();
-        }
 
         [HttpGet("daily-limit/{userId}")]
         public async Task<IActionResult> GetDailyLimit(ulong userId)
@@ -1844,45 +2073,46 @@ namespace MarketingSpeedAPI.Controllers
 
                 string senderNumber = NormalizePhone(account.AccountIdentifier);
 
-                // 🕒 أول رسالة أرسلها الحساب
-                var firstLog = await _context.message_logs
+                // 🕒 آخر رسالة أرسلها المستخدم
+                var lastLog = await _context.message_logs
                     .Where(m => m.sender == senderNumber)
-                    .OrderBy(m => m.AttemptedAt)
+                    .OrderByDescending(m => m.AttemptedAt)
                     .FirstOrDefaultAsync();
 
-                DateTime firstSendDate = firstLog?.AttemptedAt ?? DateTime.Now;
-                int totalDays = (DateTime.Now.Date - firstSendDate.Date).Days;
-                int dayInCycle = (totalDays % 30) + 1;
-
-                // 🧮 الحد اليومي بناءً على اليوم داخل الدورة
-                int dailyLimit = dayInCycle switch
-                {
-                    <= 3 => 100,
-                    <= 6 => 300,
-                    <= 9 => 500,
-                    _ => int.MaxValue // بعد اليوم التاسع مفتوح
-                };
-
-                // 📆 عدد الرسائل المرسلة اليوم (للأشخاص فقط)
                 DateTime today = DateTime.Now.Date;
-                int sentToday = await _context.message_logs
-                    .CountAsync(m =>
-                        m.sender == senderNumber &&
-                        m.AttemptedAt >= today &&
-                        !m.Recipient.EndsWith("@g.us")); // ✅ استبعاد المجموعات
 
-                int remaining = (dailyLimit == int.MaxValue)
-                    ? int.MaxValue
-                    : Math.Max(0, dailyLimit - sentToday);
-
-                return Ok(new
+                // إذا المستخدم لم يرسل أي رسالة من قبل → يوم رقم 1
+                if (lastLog == null)
                 {
-                    success = true,
-                    dailyLimit = (dailyLimit == int.MaxValue) ? 999999 : dailyLimit,
-                    sentToday,
-                    remaining = (remaining == int.MaxValue) ? 999999 : remaining,
-                    dayInCycle
-                });
+                    return await CalculateCycleResult(senderNumber, 1);
+
+                }
+
+                DateTime lastSendDate = lastLog.AttemptedAt.Date;
+                int gapDays = (today - lastSendDate).Days;
+
+                int dayInCycle;
+
+                if (gapDays > 2)
+                {
+                    // ⛔ غياب يومين أو أكثر → إعادة الدورة من جديد
+                    dayInCycle = 1;
+                }
+                else if (gapDays == 2)
+                {
+                    // ⏳ غياب يوم واحد فقط → لا نحسبه → يبقى المستخدم على نفس اليوم
+                    dayInCycle = (await GetLastDayInCycle(senderNumber)) - 1;
+                }
+                else
+                {
+                    // 📅 gapDays = 0 → المستخدم أرسل اليوم → نزيد اليوم
+                    dayInCycle = (await GetLastDayInCycle(senderNumber)) + 1;
+                }
+
+                // حماية: 30 يوم فقط
+                if (dayInCycle > 30) dayInCycle = 30;
+
+                return await CalculateCycleResult(senderNumber, dayInCycle);
             }
             catch (Exception ex)
             {
@@ -1893,6 +2123,52 @@ namespace MarketingSpeedAPI.Controllers
                     message = "Internal Server Error"
                 });
             }
+        }
+
+        private async Task<int> GetLastDayInCycle(string sender)
+        {
+            var firstLog = await _context.message_logs
+                .Where(m => m.sender == sender)
+                .OrderBy(m => m.AttemptedAt)
+                .FirstOrDefaultAsync();
+
+            if (firstLog == null) return 1;
+
+            int daysPassed = (DateTime.Now.Date - firstLog.AttemptedAt.Date).Days;
+            return (daysPassed % 30) + 1;
+        }
+
+        private async Task<IActionResult> CalculateCycleResult(string senderNumber, int dayInCycle)
+        {
+            int dailyLimit = dayInCycle switch
+            {
+                <= 3 => 100,
+                <= 6 => 300,
+                <= 9 => 500,
+                _ => int.MaxValue
+            };
+
+            DateTime today = DateTime.Now.Date;
+
+            // عدد الرسائل المرسلة اليوم (للأفراد فقط)
+            int sentToday = await _context.message_logs.CountAsync(m =>
+                m.sender == senderNumber &&
+                m.AttemptedAt >= today &&
+                !m.Recipient.EndsWith("@g.us")
+            );
+
+            int remaining = (dailyLimit == int.MaxValue)
+                ? int.MaxValue
+                : Math.Max(0, dailyLimit - sentToday);
+
+            return new JsonResult(new
+            {
+                success = true,
+                dailyLimit = (dailyLimit == int.MaxValue) ? 999999 : dailyLimit,
+                sentToday,
+                remaining = (remaining == int.MaxValue) ? 999999 : remaining,
+                dayInCycle
+            });
         }
 
 
@@ -1908,34 +2184,55 @@ namespace MarketingSpeedAPI.Controllers
             if (string.IsNullOrWhiteSpace(req.Name))
                 return Ok(new { success = false, message = "Group name is required" });
 
-            // تحقق إذا كانت المجموعة موجودة
+            // 🔹 check if subscription exists and active
             var existingSubscription = await _context.group_subscriptions
                 .FirstOrDefaultAsync(g => g.UserId == userId && g.GroupId == req.Name && g.Status == "active");
 
             string groupJid = "";
+
             if (existingSubscription != null)
             {
+                // group already exists
                 groupJid = existingSubscription.GroupId;
             }
             else
             {
-                // إنشاء المجموعة
-                var createRequest = new RestRequest("/api/groups", Method.Post);
-                createRequest.AddHeader("Authorization", $"Bearer {account.AccessToken}");
-                createRequest.AddHeader("Content-Type", "application/json");
+                // 🆕 ---------- WHAPI GROUP CREATE ----------
+                var options = new RestClientOptions("https://gate.whapi.cloud/groups");
+                var client = new RestClient(options);
 
-                var initialMembers = req.Members?.Take(2).ToArray() ?? Array.Empty<string>();
-                createRequest.AddJsonBody(new { name = req.Name, participants = initialMembers });
+                // participants = رقم بدون أي suffix
+                var members = req.Members?.Take(2).ToArray() ?? Array.Empty<string>();
 
-                var createResponse = await _client.ExecuteAsync(createRequest);
-                if (!createResponse.IsSuccessful)
-                    return Ok(new { success = false, message = "Failed to create group", error = createResponse.Content });
+                var request = new RestRequest("", Method.Post);
+                request.AddHeader("accept", "application/json");
+                request.AddHeader("authorization", $"Bearer {account.AccessToken}");
 
-                var json = JsonDocument.Parse(createResponse.Content);
-                var data = json.RootElement.GetProperty("data");
-                groupJid = data.GetProperty("id").GetString();
+                request.AddJsonBody(new
+                {
+                    participants = members,
+                    subject = req.Name        // مهم: WHAPI يستخدم subject بدل name
+                });
 
-                // حفظ في قاعدة البيانات
+                var response = await client.PostAsync(request);
+
+                if (!response.IsSuccessful)
+                {
+                    return Ok(new
+                    {
+                        success = false,
+                        message = "Failed to create group",
+                        error = response.Content
+                    });
+                }
+
+                var json = JsonDocument.Parse(response.Content);
+                groupJid = json.RootElement.GetProperty("group_id").GetString();
+
+                if (string.IsNullOrEmpty(groupJid))
+                    return Ok(new { success = false, message = "Invalid WHAPI response" });
+
+                // 🔹 Save to DB
                 var sub = new GroupSubscription
                 {
                     UserId = (int)userId,
@@ -1945,8 +2242,11 @@ namespace MarketingSpeedAPI.Controllers
                     Status = "active",
                     LastBatchTime = DateTime.Now
                 };
+
                 _context.group_subscriptions.Add(sub);
                 await _context.SaveChangesAsync();
+
+                // 🔹 Deduct usage
                 await DeductUsageForCreatingGroupsAsync((int)userId, 2);
             }
 
@@ -1958,12 +2258,13 @@ namespace MarketingSpeedAPI.Controllers
             });
         }
 
-
         [HttpPost("add-group-members/{userId}")]
         public async Task<IActionResult> AddGroupMembers(long userId, [FromBody] AddGroupMembersRequest req)
         {
             var account = await _context.user_accounts
-                .FirstOrDefaultAsync(a => a.UserId == (int)userId && a.PlatformId == 1 && a.Status == "connected");
+                .FirstOrDefaultAsync(a => a.UserId == (int)userId &&
+                                          a.PlatformId == 1 &&
+                                          a.Status == "connected");
 
             if (account == null)
                 return Ok(new { success = false, message = "No connected account found" });
@@ -1978,47 +2279,59 @@ namespace MarketingSpeedAPI.Controllers
             {
                 try
                 {
-                    var addRequest = new RestRequest($"/api/groups/{req.GroupId}/participants/add", Method.Post);
-                    addRequest.AddHeader("Authorization", $"Bearer {account.AccessToken}");
-                    addRequest.AddHeader("Content-Type", "application/json");
-                    addRequest.AddJsonBody(new { participants = new List<string> { member } });
+                    // 🔥 WHAPI — endpoint الجديد
+                    var client = new RestClient($"https://gate.whapi.cloud/groups/{req.GroupId}/participants");
+                    var request = new RestRequest("", Method.Post);
 
-                    var response = await _client.ExecuteAsync(addRequest);
+                    request.AddHeader("accept", "application/json");
+                    request.AddHeader("authorization", $"Bearer {account.AccessToken}");
+
+                    // لا تضيف أي suffix — ترسل الرقم فقط
+                    request.AddJsonBody(new
+                    {
+                        participants = new List<string> { member }
+                    });
+
+                    var response = await client.ExecuteAsync(request);
                     bool success = response.IsSuccessful;
-                    string? error = success ? null : response.Content;
+                    string? errorMessage = success ? null : response.Content;
 
                     results.Add(new
                     {
                         member,
                         success,
-                        error
+                        error = errorMessage
                     });
 
                     if (success)
                     {
                         successCount++;
 
-                        // ✅ خصم مباشر من الاستخدام عند نجاح الإضافة
-                        await DeductUsageForCreatingGroupsAsync((int)userId,1);
-                    }
-                    else
-                    {
+                        // خصم الاستخدام كما هو
+                        await DeductUsageForCreatingGroupsAsync((int)userId, 1);
                     }
 
-                    // ⏳ انتظار عشوائي بين 10 و 20 ثانية قبل العضو التالي
+                    // ⏳ الانتظار العشوائي كما في كودك القديم
                     int delaySec = Random.Shared.Next(10, 21);
                     await Task.Delay(delaySec * 1000);
                 }
                 catch (Exception ex)
                 {
-                    results.Add(new { member, success = false, error = ex.Message });
+                    results.Add(new
+                    {
+                        member,
+                        success = false,
+                        error = ex.Message
+                    });
                 }
             }
 
-            // ✅ تحديث آخر وقت Batch
+            // تحديث batch time كما هو تماماً
             try
             {
-                var sub = await _context.group_subscriptions.FirstOrDefaultAsync(g => g.GroupId == req.GroupId);
+                var sub = await _context.group_subscriptions
+                    .FirstOrDefaultAsync(g => g.GroupId == req.GroupId);
+
                 if (sub != null)
                 {
                     sub.LastBatchTime = DateTime.Now;
@@ -2026,9 +2339,7 @@ namespace MarketingSpeedAPI.Controllers
                     await _context.SaveChangesAsync();
                 }
             }
-            catch (Exception ex)
-            {
-            }
+            catch { }
 
             return Ok(new
             {
@@ -2087,118 +2398,6 @@ namespace MarketingSpeedAPI.Controllers
         }
 
 
-        // ✅ Presence: Available
-        [HttpPost("presence/available/{userId}")]
-        public async Task<IActionResult> SendPresenceAvailable(long userId,int delayTime)
-        {
-            var account = await _context.user_accounts
-                .FirstOrDefaultAsync(a => a.UserId == (int)userId && a.PlatformId == 1 && a.Status == "connected");
-
-            if (account == null)
-                return Ok(new { success = false, message = "No connected account found" });
-
-            try
-            {
-                string CleanNumber(string input)
-                {
-                    return new string(input.Where(char.IsDigit).ToArray());
-                }
-
-                var cleanIdentifier = CleanNumber(account.AccountIdentifier);
-                var request = new RestRequest("/api/send-presence-update", Method.Post);
-                request.AddHeader("Authorization", $"Bearer {account.AccessToken}");
-                request.AddHeader("Content-Type", "application/json");
-                request.AddJsonBody(new
-                {
-                    jid = $"{cleanIdentifier}@s.whatsapp.net",
-                    type = "available",
-                    delayMs = delayTime
-                });
-
-                var response = await _client.ExecuteAsync(request);
-                if (!response.IsSuccessful)
-                    return Ok(new { success = false, message = "Failed to send available", error = response.Content });
-
-                return Ok(new { success = true, message = "Presence set to available" });
-            }
-            catch (Exception ex)
-            {
-                return Ok(new { success = false, message = "Error sending available", error = ex.Message });
-            }
-        }
-
-        // ✅ Presence: Unavailable
-        [HttpPost("presence/unavailable/{userId}")]
-        public async Task<IActionResult> SendPresenceUnavailable(long userId, int delayTime)
-        {
-            var account = await _context.user_accounts
-                .FirstOrDefaultAsync(a => a.UserId == (int)userId && a.PlatformId == 1 && a.Status == "connected");
-
-            if (account == null)
-                return Ok(new { success = false, message = "No connected account found" });
-
-            try
-            {
-                string CleanNumber(string input)
-                {
-                    return new string(input.Where(char.IsDigit).ToArray());
-                }
-
-                var cleanIdentifier = CleanNumber(account.AccountIdentifier);
-
-                var request = new RestRequest("/api/send-presence-update", Method.Post);
-                request.AddHeader("Authorization", $"Bearer {account.AccessToken}");
-                request.AddHeader("Content-Type", "application/json");
-                request.AddJsonBody(new
-                {
-                    jid = $"{cleanIdentifier}@s.whatsapp.net",
-                    type = "unavailable",
-                    delayMs = delayTime
-                });
-
-                var response = await _client.ExecuteAsync(request);
-                if (!response.IsSuccessful)
-                    return Ok(new { success = false, message = "Failed to send unavailable", error = response.Content });
-
-                return Ok(new { success = true, message = "Presence set to unavailable" });
-            }
-            catch (Exception ex)
-            {
-                return Ok(new { success = false, message = "Error sending unavailable", error = ex.Message });
-            }
-        }
-
-        // ✅ Restart Session
-        [HttpPost("session/restart/{userId}")]
-        public async Task<IActionResult> RestartSession(long userId)
-        {
-            var account = await _context.user_accounts
-                .FirstOrDefaultAsync(a => a.UserId == (int)userId && a.PlatformId == 1 && a.Status == "connected");
-
-            if (account == null)
-                return Ok(new { success = false, message = "No connected account found" });
-
-            try
-            {
-                var request = new RestRequest($"/api/restart-session/{account.WasenderSessionId}", Method.Post);
-                request.AddHeader("Authorization", $"Bearer {account.AccessToken}");
-
-                var response = await _client.ExecuteAsync(request);
-                if (!response.IsSuccessful)
-                    return Ok(new { success = false, message = "Failed to restart session", error = response.Content });
-
-                // تحديث الحالة محليًا في قاعدة البيانات
-                account.Status = "connected";
-                _context.user_accounts.Update(account);
-                await _context.SaveChangesAsync();
-
-                return Ok(new { success = true, message = "Session restarted successfully" });
-            }
-            catch (Exception ex)
-            {
-                return Ok(new { success = false, message = "Error restarting session", error = ex.Message });
-            }
-        }
 
     }
 }

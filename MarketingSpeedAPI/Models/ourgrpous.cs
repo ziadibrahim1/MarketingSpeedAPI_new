@@ -86,7 +86,8 @@ namespace MarketingSpeedAPI.Models
     public class LeaveGroupRequest
     {
         public string Jid { get; set; }           // معرف المجموعة (jid)
-        public string GroupName { get; set; }     // اختياري، اسم المجموعة
+        public string? GroupName { get; set; }
+        // اختياري، اسم المجموعة
     }
 
 

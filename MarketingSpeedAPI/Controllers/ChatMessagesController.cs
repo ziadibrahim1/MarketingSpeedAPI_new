@@ -55,12 +55,20 @@ namespace MarketingSpeedAPI.Controllers
                 return "";
 
             phone = phone.Trim().Replace(" ", "").Replace("-", "");
+
+            // إصلاح حالات 966
             if (phone.StartsWith("+9660"))
                 phone = phone.Replace("+9660", "+966");
             else if (phone.StartsWith("009660"))
                 phone = phone.Replace("009660", "00966");
+
+            // إزالة علامة + إذا كانت في البداية
+            if (phone.StartsWith("+"))
+                phone = phone.Substring(1);
+
             return phone;
         }
+
         [HttpGet("{userPhone}")]
        
         public async Task<IActionResult> GetChatMessagesForUser(string userPhone)

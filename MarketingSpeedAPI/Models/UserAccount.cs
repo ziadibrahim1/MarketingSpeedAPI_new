@@ -17,9 +17,19 @@
         public DateTime CreatedAt { get; set; }
         public DateTime UpdatedAt { get; set; }
         public string? WebhookSecret { get; set; }
+        public string? channelId { get; set; }
 
         public int? WasenderSessionId { get; set; }
     }
+
+    public class ConfirmLoginRequest
+    {
+        public int UserId { get; set; }
+        public int PlatformId { get; set; }
+        public string Phone { get; set; }
+        public string Code { get; set; }
+    }
+
     public class WasenderSettings
     {
         public string BaseUrl { get; set; }
