@@ -29,7 +29,7 @@ namespace MarketingSpeedAPI.Controllers
         public async Task<IActionResult> GetMessagesByBody()
         {
             var logs = await _context.message_logs
-                .Where(l => l.Status == "sent")
+                .Where(l => l.Status == "sent" && l.PlatformId==1)
                 .Select(l => new
                 {
                     Body = l.body ?? "",                // 👈 هنا بنمنع NULL يوصل للـ reader

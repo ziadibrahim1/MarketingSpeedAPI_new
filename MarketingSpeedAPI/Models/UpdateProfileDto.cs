@@ -20,7 +20,8 @@
         public string? Message { get; set; }
         public List<string>? ImageUrls { get; set; }
         public long? MainMessageId { get; set; }
-    }
+        public bool? fromChates { get; set; }
+}
     public class SendSingleMemberRequest
     {
         public int PlatformId { get; set; }           // معرف المنصة (مثل WhatsApp = 1)

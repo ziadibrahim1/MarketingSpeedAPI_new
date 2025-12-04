@@ -50,7 +50,7 @@ public class WebhookController : ControllerBase
         string type = messageObj.GetProperty("type").GetString();
 
         // تجاهل المجموعات
-        if (chatId.EndsWith("@g.us"))
+        if (chatId.EndsWith("@g.us") || fromMe)
             return Ok(new { ignored = "group_message" });
 
         // تنظيف الرقم
@@ -78,7 +78,7 @@ public class WebhookController : ControllerBase
             IsSentByMe = fromMe,
             Timestamp = DateTime.UtcNow,
             IsRaeded = false,
-            SessionId = account.WasenderSessionId ?? 0,
+            channelId = account.channelId,
             reciverNumber = account.AccountIdentifier,
             ContactName = fromName
         };
@@ -89,7 +89,7 @@ public class WebhookController : ControllerBase
 
 
         // إرسال لـ SignalR
-        await _hub.Clients.Group($"session_{account.WasenderSessionId}")
+        await _hub.Clients.Group($"session_{account.channelId}")
             .SendAsync("ReceiveMessage",
                 msg.UserPhone,
                 msg.Text,

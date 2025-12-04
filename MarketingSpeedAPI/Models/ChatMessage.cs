@@ -12,6 +12,7 @@
         public DateTime Timestamp { get; set; }
         public string? ContactName { get; set; }
         public string? ProfileImageUrl { get; set; }
+        public string? channelId { get; set; }
 
         public int? SessionId { get; set; }
     }

@@ -31,7 +31,7 @@ namespace MarketingSpeedAPI.Controllers
 
             // 🟢 نعرض فقط المحادثات الخاصة برقم المستخدم
             var chats = await _context.ChatMessages
-                .Where(m => m.reciverNumber == NormalizePhone(user)) // هنا التحقق الرئيسي
+                .Where(m => m.reciverNumber == user && m.IsSentByMe==false)  
                 .GroupBy(m => m.UserPhone)
                 .Select(g => new
                 {
@@ -120,7 +120,7 @@ namespace MarketingSpeedAPI.Controllers
             return Ok(new { message = "تم حذف المحادثة بنجاح" });
         }
 
-        [HttpPost("{AddChatMessage}")]
+        [HttpPost("AddChatMessage")]
         public async Task<IActionResult> AddChatMessage([FromBody] ChatMessage message)
         {
             message.Timestamp = DateTime.UtcNow;

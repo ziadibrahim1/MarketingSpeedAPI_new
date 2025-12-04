@@ -657,13 +657,13 @@ namespace MarketingSpeedAPI.Controllers
         {
             var sessionId = await _context.user_accounts
                 .Where(ua => ua.UserId == userId && ua.PlatformId == platformId)
-                .Select(ua => new { ua.channelId,ua.AccountIdentifier})
+                .Select(ua => new { ua.channelId,ua.AccountIdentifier ,ua.UserId})
                 .FirstOrDefaultAsync();
 
             if (sessionId==null)
                 return NotFound(new { message = "SessionId not found for this user/platform" });
 
-            return Ok(new {phone = sessionId.AccountIdentifier , WasenderSessionId = sessionId.channelId});
+            return Ok(new {phone = sessionId.AccountIdentifier , WasenderSessionId = sessionId.channelId , UserId= sessionId.UserId });
         }
 
 

@@ -1734,11 +1734,7 @@ namespace MarketingSpeedAPI.Controllers
             }
             catch { }
 
-            // ======== فحص إن المجموعة محظورة ===========
-            bool isBlocked = !success && (
-                errorMessage?.Contains("not a participant", StringComparison.OrdinalIgnoreCase) == true ||
-                errorMessage?.Contains("forbidden", StringComparison.OrdinalIgnoreCase) == true
-            );
+           
 
             // ======== تسجيل اللوج ================
             try
@@ -1750,7 +1746,7 @@ namespace MarketingSpeedAPI.Controllers
                     sender = NormalizePhone(account.AccountIdentifier),
                     MessageId = (int)(req.MainMessageId ?? 0),
                     Recipient = req.GroupId,
-                    PlatformId = account.PlatformId,
+                    PlatformId = req.fromChates==true? 3: account.PlatformId,
                     Status = success ? "sent" : "failed",
                     ErrorMessage = errorMessage,
                     AttemptedAt = DateTime.Now,
@@ -1758,23 +1754,7 @@ namespace MarketingSpeedAPI.Controllers
                 };
 
                 _context.message_logs.Add(log);
-
-                if (isBlocked)
-                {
-                    bool exists = await _context.BlockedGroups
-                        .AnyAsync(bg => bg.GroupId == req.GroupId && bg.UserId == (int)userId);
-
-                    if (!exists)
-                    {
-                        _context.BlockedGroups.Add(new BlockedGroup
-                        {
-                            GroupId = req.GroupId,
-                            UserId = (int)userId,
-                            CreatedAt = DateTime.Now
-                        });
-                    }
-                }
-
+ 
                 await _context.SaveChangesAsync();
             }
             catch { }
@@ -1834,7 +1814,7 @@ namespace MarketingSpeedAPI.Controllers
                 catch { }
             }
 
-            return Ok(new { success, blocked = isBlocked });
+            return Ok(new { success, blocked = false });
         }
 
         string NormalizePhone(string number)
