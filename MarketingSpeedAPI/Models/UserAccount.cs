@@ -15,11 +15,13 @@
         public DateTime? ConnectedAt { get; set; }
         public DateTime? LastActivity { get; set; }
         public DateTime CreatedAt { get; set; }
+        public DateTime? LastActiveDate { get; set; }
         public DateTime UpdatedAt { get; set; }
         public string? WebhookSecret { get; set; }
         public string? channelId { get; set; }
 
         public int? WasenderSessionId { get; set; }
+        public int? CurrentDayInCycle { get; set; }
     }
 
     public class ConfirmLoginRequest

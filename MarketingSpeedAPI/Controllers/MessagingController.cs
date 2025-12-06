@@ -2052,47 +2052,65 @@ namespace MarketingSpeedAPI.Controllers
                 }
 
                 string senderNumber = NormalizePhone(account.AccountIdentifier);
-
-                // 🕒 آخر رسالة أرسلها المستخدم
-                var lastLog = await _context.message_logs
-                    .Where(m => m.sender == senderNumber)
-                    .OrderByDescending(m => m.AttemptedAt)
-                    .FirstOrDefaultAsync();
-
                 DateTime today = DateTime.Now.Date;
 
-                // إذا المستخدم لم يرسل أي رسالة من قبل → يوم رقم 1
-                if (lastLog == null)
+                // أول مرة يستخدم اليوم
+                if (account.CurrentDayInCycle == 0 || account.LastActiveDate == null)
                 {
+                    account.CurrentDayInCycle = 1;
+                    account.LastActiveDate = today;
+                    await _context.SaveChangesAsync();
+
                     return await CalculateCycleResult(senderNumber, 1);
-
                 }
 
-                DateTime lastSendDate = lastLog.AttemptedAt.Date;
-                int gapDays = (today - lastSendDate).Days;
+                int currentDay = (int)account.CurrentDayInCycle;
+                DateTime lastActive = account.LastActiveDate.Value.Date;
 
-                int dayInCycle;
+                int gapDays = (today - lastActive).Days;
 
-                if (gapDays > 2)
+                // ❶ الغياب يومين ⇒ العودة لليوم 1
+                if (gapDays >= 2)
                 {
-                    // ⛔ غياب يومين أو أكثر → إعادة الدورة من جديد
-                    dayInCycle = 1;
-                }
-                else if (gapDays == 2)
-                {
-                    // ⏳ غياب يوم واحد فقط → لا نحسبه → يبقى المستخدم على نفس اليوم
-                    dayInCycle = (await GetLastDayInCycle(senderNumber)) - 1;
-                }
-                else
-                {
-                    // 📅 gapDays = 0 → المستخدم أرسل اليوم → نزيد اليوم
-                    dayInCycle = (await GetLastDayInCycle(senderNumber)) + 1;
+                    account.CurrentDayInCycle = 1;
+                    account.LastActiveDate = today;
+                    await _context.SaveChangesAsync();
+
+                    return await CalculateCycleResult(senderNumber, 1);
                 }
 
-                // حماية: 30 يوم فقط
-                if (dayInCycle > 30) dayInCycle = 30;
+                // ❷ gapDays = 1 ⇒ تحقق 90% من يوم أمس
+                if (gapDays == 1)
+                {
+                    int yesterdayLimit = GetLimitForDay(currentDay);
 
-                return await CalculateCycleResult(senderNumber, dayInCycle);
+                    DateTime yStart = today.AddDays(-1);
+                    DateTime yEnd = today;
+
+                    int sentYesterday = await _context.message_logs.CountAsync(m =>
+                        m.sender == senderNumber &&
+                        m.AttemptedAt >= yStart &&
+                        m.AttemptedAt < yEnd &&
+                        !m.Recipient.EndsWith("@g.us")
+                    );
+
+                    bool reached90 = sentYesterday >= (int)(yesterdayLimit * 0.9);
+
+                    if (reached90)
+                        currentDay++; // نزيد اليوم
+
+                    account.CurrentDayInCycle = currentDay;
+                    account.LastActiveDate = today;
+                    await _context.SaveChangesAsync();
+
+                    return await CalculateCycleResult(senderNumber, currentDay);
+                }
+
+                // ❸ gapDays = 0 ⇒ المستخدم نشط اليوم ⇒ لا يزيد اليوم
+                account.LastActiveDate = today;
+                await _context.SaveChangesAsync();
+
+                return await CalculateCycleResult(senderNumber, currentDay);
             }
             catch (Exception ex)
             {
@@ -2115,22 +2133,16 @@ namespace MarketingSpeedAPI.Controllers
             if (firstLog == null) return 1;
 
             int daysPassed = (DateTime.Now.Date - firstLog.AttemptedAt.Date).Days;
+
             return (daysPassed % 30) + 1;
         }
 
         private async Task<IActionResult> CalculateCycleResult(string senderNumber, int dayInCycle)
         {
-            int dailyLimit = dayInCycle switch
-            {
-                <= 3 => 100,
-                <= 6 => 300,
-                <= 9 => 500,
-                _ => int.MaxValue
-            };
+            int dailyLimit = GetLimitForDay(dayInCycle);
 
             DateTime today = DateTime.Now.Date;
 
-            // عدد الرسائل المرسلة اليوم (للأفراد فقط)
             int sentToday = await _context.message_logs.CountAsync(m =>
                 m.sender == senderNumber &&
                 m.AttemptedAt >= today &&
@@ -2150,6 +2162,18 @@ namespace MarketingSpeedAPI.Controllers
                 dayInCycle
             });
         }
+
+        private int GetLimitForDay(int day)
+        {
+            return day switch
+            {
+                <= 3 => 100,
+                <= 6 => 300,
+                <= 9 => 500,
+                _ => int.MaxValue
+            };
+        }
+
 
 
         [HttpPost("create-group-from-multiple/{userId}")]
