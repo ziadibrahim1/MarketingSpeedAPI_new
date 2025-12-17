@@ -45,7 +45,7 @@ namespace MarketingSpeedAPI.Models
         public int Id { get; set; }
         public int PlatformId { get; set; }
         public string GroupName { get; set; }
-        public string Description { get; set; }
+        public string? Description { get; set; }
         public string InviteLink { get; set; }
         public int? CountryId { get; set; }
         public int? CategoryId { get; set; }

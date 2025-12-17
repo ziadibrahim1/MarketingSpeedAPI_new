@@ -36,11 +36,11 @@ namespace MarketingSpeedAPI.Controllers
             return new string(x.Where(char.IsDigit).ToArray());
         }
 
-
-        [HttpPost("create-session")]
-        public async Task<IActionResult> CreateSession([FromBody] CreateSessionRequests req)
+       
+     [HttpPost("create-session")]
+     public async Task<IActionResult> CreateSession([FromBody] CreateSessionRequests req)
         {
-            // 1) تحقق من الاشتراك
+            var authHeader = $"Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6ImExZDI2YWYyYmY4MjVmYjI5MzVjNWI3OTY3ZDA3YmYwZTMxZWIxYjcifQ.eyJwYXJ0bmVyIjp0cnVlLCJpc3MiOiJodHRwczovL3NlY3VyZXRva2VuLmdvb2dsZS5jb20vd2hhcGktYTcyMWYiLCJhdWQiOiJ3aGFwaS1hNzIxZiIsImF1dGhfdGltZSI6MTc2NDAwODM3MywidXNlcl9pZCI6InBYcXk4RkpuOFVoY1g0WjUydHNwdkc4UUpqcjEiLCJzdWIiOiJwWHF5OEZKbjhVaGNYNFo1MnRzcHZHOFFKanIxIiwiaWF0IjoxNzY0MDA4MzczLCJleHAiOjE4MjQ0ODgzNzMsImVtYWlsIjoibWFya3Rpbmcuc3BlZWRAZ21haWwuY29tIiwiZW1haWxfdmVyaWZpZWQiOnRydWUsImZpcmViYXNlIjp7ImlkZW50aXRpZXMiOnsiZW1haWwiOlsibWFya3Rpbmcuc3BlZWRAZ21haWwuY29tIl19LCJzaWduX2luX3Byb3ZpZGVyIjoicGFzc3dvcmQifX0.DXkDBDOydqV2XkRqBK9-15SZUT-ADEdHgebhIrM-cdoigtG2mYtQYhbVKnamSX86Pe4-zWgefQAUXj1DmTykp0OwhSBN_bEGuUikmwxcJnsl-nCu1azUbvADsUi9S_lKInurHsl7U_j70iOEIF_FkBEnzd7SnvxkpvHaVqNn5-DFLH_L2wzsuyM4WwJVwydqEuR_df4V3U0Bkk7abb_xg1nHbwFgGY3S57w5E4V2BAQfi-gyo4CZmimD5XAwgPFPpnH9jBWlDEWbPE_LbYkSRllByrrgdtO0WjU_aYFVD903TETspHTq1oQ1_okrUsiJDKqsMzGPufpRpu9fYweGag";
             var hasActiveSubscription = await _context.UserSubscriptions.AnyAsync(s =>
                 s.UserId == req.UserId &&
                 s.IsActive == true &&
@@ -51,115 +51,142 @@ namespace MarketingSpeedAPI.Controllers
 
             if (!hasActiveSubscription)
             {
-                return BadRequest(new
-                {
-                    success = false,
-                    message = "0"
-                });
+                return BadRequest(new { success = false, message = "0" });
             }
 
-            // 2) البحث عن حساب سابق
+            // 2) البحث عن قناة موجودة
             var existingAccount = await _context.user_accounts
-                .FirstOrDefaultAsync(a => a.UserId == req.UserId &&
-                                          a.PlatformId == req.PlatformId);
+                .FirstOrDefaultAsync(a => a.UserId == req.UserId && a.PlatformId == req.PlatformId);
 
-            
-            if (existingAccount != null && existingAccount.AccessToken != null)
+            long remainingDays = 0;
+
+            if (existingAccount != null && existingAccount.channelId != null)
             {
+                string oldChannel = existingAccount.channelId;
+                string token = existingAccount.AccessToken;
 
-                existingAccount.AccountIdentifier = req.PhoneNumber;
-                existingAccount.Status = "disconnected";
-                existingAccount.LastActivity = DateTime.UtcNow;
-                existingAccount.QrCodeExpiry = DateTime.UtcNow.AddMinutes(5);
-                await _context.SaveChangesAsync();
+                var managerClient = new RestClient("https://manager.whapi.cloud");
 
-                return Ok(new
+                // === STEP A: Get channel info ===
+                var getReq = new RestRequest($"/channels/{oldChannel}", Method.Get);
+                getReq.AddHeader("accept", "application/json");
+                getReq.AddHeader("authorization", authHeader);
+                var getResp = await managerClient.ExecuteAsync(getReq);
+
+                if (getResp.IsSuccessful)
                 {
-                    success = true,
-                    message = "Account already exists",
-                    sessionId = existingAccount.channelId,
-                    token = existingAccount.AccessToken
-                });
+                    var info = JObject.Parse(getResp.Content);
+                    long activeTill = info["activeTill"]?.ToObject<long>() ?? 0;
+
+                    var exp = DateTimeOffset.FromUnixTimeMilliseconds(activeTill).UtcDateTime;
+                    var now = DateTime.UtcNow;
+
+                    if (exp > now)
+                    {
+                        remainingDays = (long)Math.Ceiling((exp - now).TotalDays);
+                    }
+                }
+
+                // === STEP B: Delete old channel ===
+                var delReq = new RestRequest($"/channels/{oldChannel}", Method.Delete);
+                delReq.AddHeader("accept", "application/json");
+                delReq.AddHeader("authorization", authHeader);
+                await managerClient.ExecuteAsync(delReq);
             }
 
+            // === STEP C: Create NEW channel ===
+            var createClient = new RestClient("https://manager.whapi.cloud/channels");
+            var createReq = new RestRequest("", Method.Put);
+            createReq.AddHeader("accept", "application/json");
+            createReq.AddHeader("authorization", authHeader);
 
-            // 3) WHAPI — Create Channel
-            var client = new RestClient("https://manager.whapi.cloud/channels");
-            var request = new RestRequest("", Method.Put);
-            request.AddHeader("accept", "application/json");
-            request.AddHeader("authorization", $"Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6ImExZDI2YWYyYmY4MjVmYjI5MzVjNWI3OTY3ZDA3YmYwZTMxZWIxYjcifQ.eyJwYXJ0bmVyIjp0cnVlLCJpc3MiOiJodHRwczovL3NlY3VyZXRva2VuLmdvb2dsZS5jb20vd2hhcGktYTcyMWYiLCJhdWQiOiJ3aGFwaS1hNzIxZiIsImF1dGhfdGltZSI6MTc2NDAwODM3MywidXNlcl9pZCI6InBYcXk4RkpuOFVoY1g0WjUydHNwdkc4UUpqcjEiLCJzdWIiOiJwWHF5OEZKbjhVaGNYNFo1MnRzcHZHOFFKanIxIiwiaWF0IjoxNzY0MDA4MzczLCJleHAiOjE4MjQ0ODgzNzMsImVtYWlsIjoibWFya3Rpbmcuc3BlZWRAZ21haWwuY29tIiwiZW1haWxfdmVyaWZpZWQiOnRydWUsImZpcmViYXNlIjp7ImlkZW50aXRpZXMiOnsiZW1haWwiOlsibWFya3Rpbmcuc3BlZWRAZ21haWwuY29tIl19LCJzaWduX2luX3Byb3ZpZGVyIjoicGFzc3dvcmQifX0.DXkDBDOydqV2XkRqBK9-15SZUT-ADEdHgebhIrM-cdoigtG2mYtQYhbVKnamSX86Pe4-zWgefQAUXj1DmTykp0OwhSBN_bEGuUikmwxcJnsl-nCu1azUbvADsUi9S_lKInurHsl7U_j70iOEIF_FkBEnzd7SnvxkpvHaVqNn5-DFLH_L2wzsuyM4WwJVwydqEuR_df4V3U0Bkk7abb_xg1nHbwFgGY3S57w5E4V2BAQfi-gyo4CZmimD5XAwgPFPpnH9jBWlDEWbPE_LbYkSRllByrrgdtO0WjU_aYFVD903TETspHTq1oQ1_okrUsiJDKqsMzGPufpRpu9fYweGag");
-            request.AddJsonBody("{\"webhooks\":[{\"mode\":\"body\",\"url\":\"http://marketingspeed.online/api/webhook\"}],\"offline_mode\":false,\"full_history\":true}", false);
-            request.AddJsonBody("{\"offline_mode\":false,\"full_history\":true}", false);
-            request.AddJsonBody(new
+            createReq.AddJsonBody(new
             {
                 name = req.PhoneNumber,
                 phone = CleanPhone(req.PhoneNumber),
-                projectId = "K8widAUASFVsnLtMChuh"
+                projectId = "K8widAUASFVsnLtMChuh",
+                webhooks = new[] {
+            new {
+                mode = "body",
+                url = "http://marketingspeed.online/api/webhook"
+            }
+        },
+                offline_mode = false,
+                full_history = true
             });
 
-            var response = await client.ExecuteAsync(request);
+            var createResp = await createClient.ExecuteAsync(createReq);
 
-            if (!response.IsSuccessful)
+            if (!createResp.IsSuccessful)
             {
-                return StatusCode((int)response.StatusCode, new
+                return StatusCode((int)createResp.StatusCode, new
                 {
                     success = false,
-                    error = response.Content
+                    error = createResp.Content
                 });
             }
 
-
-            // 4) قراءة الاستجابة الحقيقية من WHAPI
-            var json = JObject.Parse(response.Content);
-
-            string channelId = json["id"]?.ToString();
-            string token = json["token"]?.ToString();
+            var json = JObject.Parse(createResp.Content);
+            string newChannelId = json["id"]?.ToString();
+            string newToken = json["token"]?.ToString();
             long? creationTs = json["creationTS"]?.ToObject<long>();
 
-            if (string.IsNullOrEmpty(channelId) || string.IsNullOrEmpty(token))
+            if (newChannelId == null || newToken == null)
             {
-                return BadRequest(new
-                {
-                    success = false,
-                    error = "Invalid WHAPI response"
-                });
+                return BadRequest(new { success = false, message = "Invalid WHAPI Response" });
             }
 
+            // === STEP D: Extend the NEW channel with remaining days ===
+            if (remainingDays > 0)
+            {
+                var extendReq = new RestRequest($"/{newChannelId}/extend", Method.Post);
+                extendReq.AddHeader("accept", "application/json");
+                extendReq.AddHeader("authorization", authHeader);
 
-            // 5) إنشاء أو تحديث الحساب
+                extendReq.AddJsonBody(new
+                {
+                    days = (remainingDays - 5),
+                    comment = $"{remainingDays} days restored"
+                });
+
+                var creResp = await createClient.ExecuteAsync(extendReq);
+                Console.WriteLine("MODE RESPONSE STATUS: " + creResp.StatusCode);
+            }
+            // === STEP E: Set mode = LIVE ===
+            var modeReq = new RestRequest($"/{newChannelId}/mode", Method.Patch);
+            modeReq.AddHeader("accept", "application/json");
+            modeReq.AddHeader("authorization", authHeader);
+            modeReq.AddJsonBody(new { mode = "live" });
+
+            var modeResp = await createClient.ExecuteAsync(modeReq);
+            Console.WriteLine("MODE RESPONSE STATUS: " + modeResp.StatusCode);
+            // === Save account ===
             if (existingAccount == null)
             {
                 existingAccount = new UserAccount
                 {
                     UserId = req.UserId,
                     PlatformId = req.PlatformId,
-
-                    // تخزين بيانات WHAPI في المتغيرات القديمة
                     AccountIdentifier = req.PhoneNumber,
                     DisplayName = req.Name,
-
-                    channelId = channelId,
-                    AccessToken = token,
-                    WebhookSecret = "", // WHAPI لا يرجع secret
-
+                    channelId = newChannelId,
+                    AccessToken = newToken,
                     Status = "disconnected",
-                    ConnectedAt = creationTs.HasValue ? DateTimeOffset.FromUnixTimeMilliseconds(creationTs.Value).UtcDateTime : DateTime.UtcNow,
+                    ConnectedAt = creationTs.HasValue
+                        ? DateTimeOffset.FromUnixTimeMilliseconds(creationTs.Value).UtcDateTime
+                        : DateTime.UtcNow,
                     LastActivity = DateTime.UtcNow,
-
-                    QrCodeExpiry = DateTime.UtcNow.AddMinutes(5) // وقت مؤقت
+                    QrCodeExpiry = DateTime.UtcNow.AddMinutes(5)
                 };
 
                 _context.user_accounts.Add(existingAccount);
             }
             else
             {
+                existingAccount.channelId = newChannelId;
+                existingAccount.AccessToken = newToken;
                 existingAccount.AccountIdentifier = req.PhoneNumber;
                 existingAccount.DisplayName = req.Name;
-
-                existingAccount.channelId = channelId;
-                existingAccount.AccessToken = token;
-                existingAccount.WebhookSecret = "";
-
                 existingAccount.Status = "disconnected";
                 existingAccount.LastActivity = DateTime.UtcNow;
                 existingAccount.QrCodeExpiry = DateTime.UtcNow.AddMinutes(5);
@@ -172,10 +199,13 @@ namespace MarketingSpeedAPI.Controllers
                 success = true,
                 sessionId = existingAccount.channelId,
                 token = existingAccount.AccessToken,
-                message = "Channel created successfully"
+                remainingDays = remainingDays,
+                message = "Channel recreated and restored successfully"
             });
         }
-        [HttpGet("send-login-code/{userId:int}/{platformId:int}/{phone}")]
+
+
+        [HttpGet("send-login-code/{userId:int}/{platformId:int}/{phone}")]    
         public async Task<IActionResult> SendLoginCode(int userId, int platformId, string phone)
         {
             var account = await _context.user_accounts
@@ -215,6 +245,7 @@ namespace MarketingSpeedAPI.Controllers
                 code = code // ← الكود اللي هيمسحه المستخدم من الواتساب
             });
         }
+        
         [HttpPost("confirm-login-code")]
         public async Task<IActionResult> ConfirmLoginCode([FromBody] ConfirmLoginRequest req)
         {
@@ -387,12 +418,7 @@ namespace MarketingSpeedAPI.Controllers
                     var patchRequest = new RestRequest("", Method.Patch);
                     patchRequest.AddHeader("accept", "application/json");
                     patchRequest.AddHeader("authorization", $"Bearer {account.AccessToken}");
-
-                    patchRequest.AddJsonBody(new
-                    {
-                        offline_mode = false,
-                        full_history = true,
-                    });
+                    patchRequest.AddJsonBody("{\"webhooks\":[{\"mode\":\"body\",\"events\":[{\"type\":\"messages\",\"method\":\"post\"}],\"url\":\"http://marketingspeed.online/api/webhook\"}],\"offline_mode\":false,\"full_history\":true}", false);
 
                     // تنفيذ الطلب في الخلفية بدون التأثير على الريسبونس
                     _ = patchClient.ExecuteAsync(patchRequest);

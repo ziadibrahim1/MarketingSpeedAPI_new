@@ -16,4 +16,11 @@
 
         public int? SessionId { get; set; }
     }
+    public class SaveContactRequest
+    {
+        public int PlatformId { get; set; }
+        public string Phone { get; set; } = string.Empty;
+        public string Name { get; set; } = string.Empty;
+    }
+
 }

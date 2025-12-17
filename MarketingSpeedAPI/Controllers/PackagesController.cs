@@ -38,9 +38,8 @@ namespace MarketingSpeedAPI.Controllers
             if (categoryId.HasValue)
                 query = query.Where(p => p.CategoryId == categoryId.Value);
 
-            // فلترة بالحالة
-            if (!string.IsNullOrEmpty(status))
-                query = query.Where(p => p.Status.ToLower() == status.ToLower());
+            
+                query = query.Where(p => p.Status.ToLower()  == "active");
 
             // فلترة بالأرشفة
             if (archived.HasValue)

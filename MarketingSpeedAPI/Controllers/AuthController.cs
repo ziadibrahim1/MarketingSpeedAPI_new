@@ -656,7 +656,7 @@ namespace MarketingSpeedAPI.Controllers
         public async Task<IActionResult> GetSessionId(int userId, int platformId = 1)
         {
             var sessionId = await _context.user_accounts
-                .Where(ua => ua.UserId == userId && ua.PlatformId == platformId)
+                .Where(ua => ua.UserId == userId && ua.PlatformId == platformId && ua.Status == "connected")
                 .Select(ua => new { ua.channelId,ua.AccountIdentifier ,ua.UserId})
                 .FirstOrDefaultAsync();
 
@@ -874,7 +874,7 @@ namespace MarketingSpeedAPI.Controllers
                 await _context.SaveChangesAsync();
             }
 
-            var link = $"https://myApp.com/referral?code={referral.ReferralCode}";
+            var link = $"https://play.google.com/store/apps/details?id=com.marketingspeed.marketing";
             return Ok(new { referralLink = link });
         }
 

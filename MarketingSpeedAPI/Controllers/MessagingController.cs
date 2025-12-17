@@ -369,7 +369,6 @@ namespace MarketingSpeedAPI.Controllers
         {
             var today = DateTime.Now.Date;
 
-            // 🔹 الاشتراكات النشطة
             var subscriptions = await _context.UserSubscriptions
                 .Where(s => s.UserId == (int)userId &&
                             s.IsActive &&
@@ -380,7 +379,7 @@ namespace MarketingSpeedAPI.Controllers
                 .AsNoTracking()
                 .ToListAsync();
 
-            bool hasSubscription = subscriptions != null && subscriptions.Count > 0;
+            bool hasSubscription = subscriptions.Count > 0;
             bool isConnected = false;
 
             if (!hasSubscription)
@@ -395,12 +394,11 @@ namespace MarketingSpeedAPI.Controllers
                 });
             }
 
-            // 🔹 التأكد من وجود حساب متصل
+            // 🔹 الحساب في DB
             var account = await _context.user_accounts
-                .AsNoTracking()
                 .FirstOrDefaultAsync(a => a.UserId == (int)userId && a.PlatformId == 1);
 
-            if (account == null || string.IsNullOrEmpty(account.WasenderSessionId?.ToString()))
+            if (account == null || string.IsNullOrEmpty(account.AccessToken))
             {
                 return Ok(new
                 {
@@ -412,39 +410,86 @@ namespace MarketingSpeedAPI.Controllers
                 });
             }
 
-            if (account.Status != "connected")
+            // ================================
+            //     🔍 التحقق من اتصال WHAPI
+            // ================================
+            bool whapiConnected = false;
+
+            try
             {
-                 
+                var client = new RestClient(new RestClientOptions("https://gate.whapi.cloud/users/profile"));
+                var request = new RestRequest("");
+                request.AddHeader("accept", "application/json");
+                request.AddHeader("authorization", $"Bearer {account.AccessToken}");
+
+                var response = await client.GetAsync(request);
+
+                if (response.StatusCode == System.Net.HttpStatusCode.OK &&
+                    !string.IsNullOrEmpty(response.Content) &&
+                    response.Content.Contains("name"))
+                {
+                    whapiConnected = true;
+                }
+            }
+            catch
+            {
+                whapiConnected = false;
+            }
+
+            // ================================
+            //   لو WHAPI مفصول → حدث DB
+            // ================================
+            if (!whapiConnected)
+            {
+                try
+                {
+                    account.Status = "disconnected";
+                    // لو تريد تصفير الجلسة:
+                    // account.WasenderSessionId = null;
+
+                    _context.user_accounts.Update(account);
+                    await _context.SaveChangesAsync();
+                }
+                catch { }
+
                 return Ok(new
                 {
                     success = true,
                     isConnected = false,
                     hasSubscription = true,
-                    message = "No connected session",
+                    message = "WHAPI session not connected",
                     features = new List<object>()
                 });
             }
 
-            // ✅ في هذه المرحلة المستخدم عنده اشتراك + متصل
+            // هنا WHAPI فعلاً متصل
             isConnected = true;
 
-            // 🔹 جميع الباقات النشطة
+            // 🔹 نحدث DB لو غير متصل قبل كده
+            if (account.Status != "connected")
+            {
+                account.Status = "connected";
+                _context.user_accounts.Update(account);
+                await _context.SaveChangesAsync();
+            }
+
+            // ====================================================
+            //       استرجاع الميزات والاستخدام كما في كودك
+            // ====================================================
             var packageIds = subscriptions.Select(s => s.PackageId).Distinct().ToList();
 
-            // 🔹 الميزات الرئيسية
             var features = await _context.PackageFeatures
                 .Where(f => packageIds.Contains(f.PackageId) && f.PlatformId == 1 && f.isMain == true)
                 .AsNoTracking()
                 .ToListAsync();
 
-            // 🔹 الاستخدامات لكل الاشتراكات
             var subscriptionIds = subscriptions.Select(s => s.Id).ToList();
+
             var usages = await _context.subscription_usage
                 .Where(u => u.UserId == (int)userId && subscriptionIds.Contains(u.SubscriptionId))
                 .AsNoTracking()
                 .ToListAsync();
 
-            // 🔹 تجميع البيانات النهائية
             var result = new List<object>();
             foreach (var sub in subscriptions)
             {
@@ -481,7 +526,6 @@ namespace MarketingSpeedAPI.Controllers
                 }
             }
 
-            // ✅ النتيجة النهائية
             return Ok(new
             {
                 success = true,
@@ -491,7 +535,6 @@ namespace MarketingSpeedAPI.Controllers
                 features = result
             });
         }
-
 
         [HttpGet("groups-with-members/{userId}/{platformId}")]
         public async Task<IActionResult> GetGroupsWithMembers(ulong userId, int platformId)
@@ -1064,14 +1107,17 @@ namespace MarketingSpeedAPI.Controllers
         public async Task<IActionResult> GetChats(long userId)
         {
             var account = await _context.user_accounts
-                .FirstOrDefaultAsync(a => a.UserId == (int)userId && a.PlatformId == 1 && a.Status == "connected");
+                .FirstOrDefaultAsync(a =>
+                    a.UserId == (int)userId &&
+                    a.PlatformId == 1 &&
+                    a.Status == "connected");
 
             if (account == null)
                 return Ok(new { success = false, message = "No connected account found" });
 
             try
             {
-                // قائمة الأكواد العربية المسموح بها
+                // الأكواد العربية المسموح بها
                 var allowedPrefixes = new List<string>
         {
             "20","966","971","974","973","965","968","967","962",
@@ -1079,70 +1125,78 @@ namespace MarketingSpeedAPI.Controllers
             "222","252","253","269"
         };
 
-                var collectedChats = new List<JsonElement>();
+                var collectedContacts = new List<JsonElement>();
                 int offset = 0;
                 int limit = 500;
 
                 while (true)
                 {
-                    var restClient = new RestClient($"https://gate.whapi.cloud/chats?count={limit}&offset={offset}");
+                    var restClient = new RestClient(
+                        $"https://gate.whapi.cloud/contacts?count={limit}&offset={offset}"
+                    );
+
                     var request = new RestRequest("", Method.Get);
                     request.AddHeader("accept", "application/json");
                     request.AddHeader("authorization", $"Bearer {account.AccessToken}");
 
                     var response = await restClient.ExecuteAsync(request);
 
-                    if (!response.IsSuccessful)
+                    if (!response.IsSuccessful || string.IsNullOrEmpty(response.Content))
                         break;
 
-                    var json = JsonDocument.Parse(response.Content);
+                    using var json = JsonDocument.Parse(response.Content);
 
-                    if (!json.RootElement.TryGetProperty("chats", out var chatsArray) ||
-                        chatsArray.ValueKind != JsonValueKind.Array)
+                    if (!json.RootElement.TryGetProperty("contacts", out var contactsArray) ||
+                        contactsArray.ValueKind != JsonValueKind.Array)
                         break;
 
-                    // إضافة chats من النوع contact فقط
-                    foreach (var item in chatsArray.EnumerateArray())
+                    // ✅ الحل هنا: Clone()
+                    foreach (var contact in contactsArray.EnumerateArray())
                     {
-                        if (item.TryGetProperty("type", out var typeProp) &&
-                            typeProp.GetString() == "contact")
-                        {
-                            collectedChats.Add(item);
-                        }
+                        collectedContacts.Add(contact.Clone());
                     }
 
-                    // التوقف إذا وصلنا للنهاية
                     int count = json.RootElement.GetProperty("count").GetInt32();
                     int total = json.RootElement.GetProperty("total").GetInt32();
 
                     offset += count;
-
                     if (offset >= total)
                         break;
                 }
 
-                // فلترة الدردشات بنفس منطقك القديم
-                var validChats = new List<JsonElement>();
+                // 🔽 نفس منطق الفلترة القديم
+                var validChats = new List<object>();
 
-                foreach (var item in collectedChats)
+                foreach (var item in collectedContacts)
                 {
-                    if (!item.TryGetProperty("id", out var idProp)) continue;
+                    if (!item.TryGetProperty("id", out var idProp))
+                        continue;
 
-                    var rawJid = idProp.GetString();
-                    if (string.IsNullOrEmpty(rawJid)) continue;
+                    var phone = idProp.GetString();
+                    if (string.IsNullOrWhiteSpace(phone))
+                        continue;
 
-                    // استخراج رقم الهاتف
-                    var phonePart = rawJid.Contains('@')
-                        ? rawJid.Substring(0, rawJid.IndexOf('@'))
-                        : rawJid;
-
-                    var clean = new string(phonePart.Where(char.IsDigit).ToArray());
-                    if (clean.Length < 8 || clean.Length > 15) continue;
+                    var clean = new string(phone.Where(char.IsDigit).ToArray());
+                    if (clean.Length < 8 || clean.Length > 15)
+                        continue;
 
                     if (!allowedPrefixes.Any(prefix => clean.StartsWith(prefix)))
                         continue;
 
-                    validChats.Add(item);
+                    validChats.Add(new
+                    {
+                        id = phone + "@c.us",     // نفس صيغة chats
+                        type = "contact",
+                        name = item.TryGetProperty("name", out var nameProp)
+                            ? nameProp.GetString()
+                            : null,
+                        pushname = item.TryGetProperty("pushname", out var pushProp)
+                            ? pushProp.GetString()
+                            : null,
+                        saved = item.TryGetProperty("saved", out var savedProp)
+                            ? savedProp.GetBoolean()
+                            : false
+                    });
                 }
 
                 return Ok(new
@@ -1154,9 +1208,15 @@ namespace MarketingSpeedAPI.Controllers
             }
             catch (Exception ex)
             {
-                return Ok(new { success = false, message = "Error fetching chats", error = ex.Message });
+                return Ok(new
+                {
+                    success = false,
+                    message = "Error fetching chats",
+                    error = ex.Message
+                });
             }
         }
+
 
         [HttpGet("get-personal-chats/{userId}")]
         public async Task<IActionResult> GetPersonalChats(long userId)
@@ -1651,171 +1711,80 @@ namespace MarketingSpeedAPI.Controllers
             });
         }
 
-
-        [HttpPost("send-to-single-group/{userId}")]
-        public async Task<IActionResult> SendToSingleGroup(ulong userId, [FromBody] SendSingleGroupRequest req)
+        [HttpPost("save-contact/{userId}")]
+        public async Task<IActionResult> SaveContact(ulong userId,[FromBody] SaveContactRequest req)
         {
-            if (string.IsNullOrEmpty(req.GroupId))
-                return BadRequest(new { success = false, blocked = false, error = "GroupId is required" });
+            if (string.IsNullOrWhiteSpace(req.Phone) || string.IsNullOrWhiteSpace(req.Name))
+            {
+                return BadRequest(new
+                {
+                    success = false,
+                    error = "Phone and name are required"
+                });
+            }
 
+            // جلب حساب واتساب المتصل
             var account = await _context.user_accounts
-                .FirstOrDefaultAsync(a => a.UserId == (int)userId && a.PlatformId == 1 && a.Status == "connected");
+                .FirstOrDefaultAsync(a =>
+                    a.UserId == (int)userId &&
+                    a.PlatformId == req.PlatformId &&
+                    a.Status == "connected");
 
             if (account == null)
-                return Ok(new { success = false, blocked = false, error = "No connected account found" });
-
-            // نص الرسالة – spin syntax
-            string? finalText = !string.IsNullOrWhiteSpace(req.Message) ? SpinText(req.Message) : null;
-
-            bool hasAttachment = req.ImageUrls != null && req.ImageUrls.Any();
-            string endpoint = "";
-            Dictionary<string, object?> body = new();
-
-            body["to"] = req.GroupId; // group id in WHAPI
-
-            // ========= تحديد نوع الرسالة حسب الملفات ===========
-            if (hasAttachment)
             {
-                string mediaUrl = req.ImageUrls.First();
-                string ext = Path.GetExtension(mediaUrl).ToLower();
-
-                if (ext == ".jpg" || ext == ".jpeg" || ext == ".png")
+                return Ok(new
                 {
-                    endpoint = "messages/image";
-                    body["image"] = mediaUrl;
-                    if (finalText != null) body["caption"] = finalText;
-                }
-                else if (ext == ".mp4")
-                {
-                    endpoint = "messages/video";
-                    body["video"] = mediaUrl;
-                    if (finalText != null) body["caption"] = finalText;
-                }
-                else if (ext == ".pdf" || ext == ".docx")
-                {
-                    endpoint = "messages/document";
-                    body["document"] = mediaUrl;
-                    if (finalText != null) body["caption"] = finalText;
-                }
-                else
-                {
-                    // fallback text only
-                    endpoint = "messages/text";
-                    body["body"] = finalText ?? "";
-                }
-            }
-            else
-            {
-                endpoint = "messages/text";
-                body["body"] = finalText ?? "";
+                    success = false,
+                    error = "No connected WhatsApp account found"
+                });
             }
 
-            // ================= إرسال الرسالة =======================
-            var client = new RestClient("https://gate.whapi.cloud/");
-            var request = new RestRequest(endpoint, Method.Post);
+            var phone = NormalizePhone(req.Phone);
+
+            // إعداد WHAPI
+            var client = new RestClient(new RestClientOptions("https://gate.whapi.cloud"));
+            var request = new RestRequest("contacts", Method.Put);
 
             request.AddHeader("accept", "application/json");
             request.AddHeader("authorization", $"Bearer {account.AccessToken}");
-            request.AddJsonBody(body);
+            request.AddHeader("content-type", "application/json");
 
-            var response = await client.ExecuteAsync(request);
-            bool success = response.IsSuccessful;
-            string? errorMessage = success ? null : (response.ErrorMessage ?? response.Content);
+            request.AddJsonBody(new
+            {
+                phone = phone,
+                name = req.Name
+            });
 
-            // WHAPI لا يعيد msgId ثابت، لكن نحاول نقرأه لو موجود
-            string? externalId = null;
             try
             {
-                if (!string.IsNullOrEmpty(response.Content))
+                var response = await client.ExecuteAsync(request);
+
+                if (!response.IsSuccessful)
                 {
-                    var json = JObject.Parse(response.Content);
-                    externalId = json["id"]?.ToString();
-                }
-            }
-            catch { }
-
-           
-
-            // ======== تسجيل اللوج ================
-            try
-            {
-                var log = new MessageLog
-                {
-                    UserId = (int)userId,
-                    body = req.Message,
-                    sender = NormalizePhone(account.AccountIdentifier),
-                    MessageId = (int)(req.MainMessageId ?? 0),
-                    Recipient = req.GroupId,
-                    PlatformId = req.fromChates==true? 3: account.PlatformId,
-                    Status = success ? "sent" : "failed",
-                    ErrorMessage = errorMessage,
-                    AttemptedAt = DateTime.Now,
-                    ExternalMessageId = externalId
-                };
-
-                _context.message_logs.Add(log);
- 
-                await _context.SaveChangesAsync();
-            }
-            catch { }
-
-            // ======== خصم الاستخدام (نفس النظام القديم) ===========
-            if (success)
-            {
-                try
-                {
-                    var activeSubs = await _context.UserSubscriptions
-                        .Where(s => s.UserId == (int)userId &&
-                                    s.IsActive &&
-                                    s.PaymentStatus == "paid" &&
-                                    s.StartDate <= DateTime.Now &&
-                                    s.EndDate >= DateTime.Now)
-                        .OrderBy(s => s.StartDate)
-                        .ToListAsync();
-
-                    foreach (var sub in activeSubs)
+                    return Ok(new
                     {
-                        var feature = await _context.PackageFeatures
-                            .FirstOrDefaultAsync(f => f.PackageId == sub.PackageId && f.forGetingGruops == true);
-
-                        if (feature == null) continue;
-
-                        var usage = await _context.subscription_usage
-                            .FirstOrDefaultAsync(u => u.UserId == (int)userId &&
-                                                      u.SubscriptionId == sub.Id &&
-                                                      u.FeatureId == feature.Id);
-
-                        if (usage == null)
-                        {
-                            usage = new SubscriptionUsage
-                            {
-                                UserId = (int)userId,
-                                SubscriptionId = sub.Id,
-                                PackageId = sub.PackageId,
-                                FeatureId = feature.Id,
-                                LimitCount = feature.LimitCount,
-                                UsedCount = 1,
-                                LastUsedAt = DateTime.Now
-                            };
-                            _context.subscription_usage.Add(usage);
-                            await _context.SaveChangesAsync();
-                            break;
-                        }
-                        else if (usage.LimitCount > usage.UsedCount)
-                        {
-                            usage.UsedCount += 1;
-                            usage.LastUsedAt = DateTime.Now;
-                            _context.subscription_usage.Update(usage);
-                            await _context.SaveChangesAsync();
-                            break;
-                        }
-                    }
+                        success = false,
+                        error = response.Content ?? response.ErrorMessage
+                    });
                 }
-                catch { }
-            }
 
-            return Ok(new { success, blocked = false });
+                return Ok(new
+                {
+                    success = true,
+                    phone,
+                    name = req.Name
+                });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new
+                {
+                    success = false,
+                    error = ex.Message
+                });
+            }
         }
+
 
         string NormalizePhone(string number)
         {
@@ -1844,7 +1813,7 @@ namespace MarketingSpeedAPI.Controllers
                                           a.PlatformId == req.PlatformId &&
                                           a.Status == "connected");
 
-            if (account == null || string.IsNullOrEmpty(account.WasenderSessionId?.ToString()))
+            if (account == null  )
                 return Ok(new { success = false, blocked = false, error = "No connected account found" });
 
             if (NormalizePhone(account.AccountIdentifier) == NormalizePhone(req.Recipient))
@@ -1880,7 +1849,7 @@ namespace MarketingSpeedAPI.Controllers
             if (req.ImageUrls != null && req.ImageUrls.Any())
             {
                 sendReq = new RestRequest("messages/image", Method.Post);
-                sendReq.AddHeader("authorization", $"Bearer SpBp40DPYUgD0EMvzD8qrYfwRfgfKO5U");
+                sendReq.AddHeader("authorization", $"Bearer {account.AccessToken}");
                 sendReq.AddHeader("accept", "application/json");
                 sendReq.AddHeader("content-type", "application/json");
 
@@ -2028,6 +1997,151 @@ namespace MarketingSpeedAPI.Controllers
             });
         }
 
+        [HttpPost("send-to-single-group/{userId}")]
+        public async Task<IActionResult> SendToSingleGroup(ulong userId, [FromBody] SendSingleGroupRequest req)
+        {
+            if (string.IsNullOrEmpty(req.GroupId))
+                return BadRequest(new { success = false, blocked = false, error = "GroupId is required" });
+
+            var account = await _context.user_accounts
+                .FirstOrDefaultAsync(a => a.UserId == (int)userId &&
+                                          a.PlatformId == 1 &&
+                                          a.Status == "connected");
+
+            if (account == null)
+                return Ok(new { success = false, blocked = false, error = "No connected account found" });
+
+            string? finalText = !string.IsNullOrWhiteSpace(req.Message) ? SpinText(req.Message) : null;
+            bool hasAttachment = req.ImageUrls != null && req.ImageUrls.Any();
+            string endpoint = "";
+            string recipient = req.GroupId;
+            string? externalId = null;
+
+            var body = new Dictionary<string, object?> { { "to", recipient } };
+
+            // ----------------------------------------
+            //       تحديد نوع الرسالة
+            // ----------------------------------------
+            if (hasAttachment)
+            {
+                string mediaUrl = req.ImageUrls.First();
+                string ext = Path.GetExtension(mediaUrl).ToLower();
+
+                if (ext is ".jpg" or ".jpeg" or ".png")
+                {
+                    endpoint = "messages/image";
+                    body["media"] = mediaUrl;
+                    if (finalText != null) body["caption"] = finalText;
+                }
+                else if (ext == ".mp4")
+                {
+                    endpoint = "messages/video";
+                    body["media"] = mediaUrl;
+                    if (finalText != null) body["caption"] = finalText;
+                }
+                else if (ext == ".pdf" || ext == ".docx")
+                {
+                    endpoint = "messages/document";
+                    body["media"] = mediaUrl;
+                    body["mimetype"] = ext == ".pdf" ? "application/pdf" : "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+                    if (finalText != null) body["caption"] = finalText;
+                }
+                else
+                {
+                    endpoint = "messages/text";
+                    body["body"] = finalText ?? "";
+                }
+            }
+            else
+            {
+                endpoint = "messages/text";
+                body["body"] = finalText ?? "";
+            }
+
+            // ----------------------------------------
+            //       إنشاء الطلب
+            // ----------------------------------------
+            var client = new RestClient(new RestClientOptions("https://gate.whapi.cloud"));
+            var sendReq = new RestRequest(endpoint, Method.Post);
+
+            sendReq.AddHeader("authorization", $"Bearer {account.AccessToken}");
+            sendReq.AddHeader("accept", "application/json");
+            sendReq.AddHeader("content-type", "application/json");
+            sendReq.AddJsonBody(body);
+
+            bool success = false;
+            bool blocked = false;
+            string? errorMessage = null;
+
+            // ----------------------------------------
+            //       إعادة المحاولة مرتين مثل member
+            // ----------------------------------------
+            for (int attempt = 0; attempt < 2; attempt++)
+            {
+                var res = await client.ExecuteAsync(sendReq);
+
+                if (res.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
+                {
+                    await Task.Delay(3500);
+                    continue;
+                }
+
+                success = res.IsSuccessful;
+                errorMessage = success ? null : (res.ErrorMessage ?? res.Content);
+
+                if (success)
+                {
+                    try
+                    {
+                        var json = JObject.Parse(res.Content);
+                        externalId = json["message"]?["id"]?.ToString();
+                    }
+                    catch { }
+                }
+
+                blocked =
+                    !success &&
+                    (
+                        (errorMessage?.Contains("Recipient_not_found", StringComparison.OrdinalIgnoreCase) ?? false) ||
+                        (errorMessage?.Contains("blocked", StringComparison.OrdinalIgnoreCase) ?? false)
+                    );
+
+                break;
+            }
+
+            // ----------------------------------------
+            //       تسجيل اللوج
+            // ----------------------------------------
+            try
+            {
+                var log = new MessageLog
+                {
+                    MessageId = (int)(req.MainMessageId ?? 0),
+                    Recipient = req.GroupId,
+                    sender = NormalizePhone(account.AccountIdentifier),
+                    UserId = (int)userId,
+                    body = req.Message,
+                    PlatformId = req.fromChates == true ? 3 : account.PlatformId,
+                    Status = success ? "sent" : "failed",
+                    ErrorMessage = errorMessage,
+                    AttemptedAt = DateTime.Now,
+                    ExternalMessageId = externalId
+                };
+
+                _context.message_logs.Add(log);
+                await _context.SaveChangesAsync();
+            }
+            catch { }
+
+            return Ok(new
+            {
+                success,
+                req.MainMessageId,
+                blocked,
+                error = errorMessage,
+                externalId
+            });
+        }
 
 
         [HttpGet("daily-limit/{userId}")]
@@ -2167,10 +2281,10 @@ namespace MarketingSpeedAPI.Controllers
         {
             return day switch
             {
-                <= 3 => 100,
-                <= 6 => 300,
+                <= 3 => 500,
+                <= 6 => 500,
                 <= 9 => 500,
-                _ => int.MaxValue
+                _ => 500
             };
         }
 

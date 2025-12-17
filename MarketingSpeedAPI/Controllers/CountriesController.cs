@@ -433,8 +433,7 @@ namespace MarketingSpeedAPI.Controllers
 
             try
             {
-                // ❗ WHAPI لا يدعم fetch invite-link
-                // عشان الفلاتر لا يبوظ → نولد inviteCode وهمي ثابت بناءً على ال-groupId
+                
                 string inviteCode = Convert.ToBase64String(
                     System.Text.Encoding.UTF8.GetBytes(req.Jid)
                 ).Replace("=", "").Replace("/", "").Replace("+", "");
