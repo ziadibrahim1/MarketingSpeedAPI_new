@@ -106,7 +106,7 @@ namespace MarketingSpeedAPI.Controllers
             try
             {
                 var subscriptions = await _context.UserSubscriptions
-                    .Where(s => s.UserId == userId && s.IsActive && s.PaymentStatus == "paid")
+                    .Where(s => s.UserId == userId && s.IsActive && s.PaymentStatus == "paid" && s.EndDate.Date >= DateTime.UtcNow.Date)
                     .Include(s => s.Package)
                         .ThenInclude(p => p.Features)
                     .OrderByDescending(s => s.CreatedAt)

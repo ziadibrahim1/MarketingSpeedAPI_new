@@ -3,6 +3,7 @@ using MarketingSpeedAPI.Data;
 using MarketingSpeedAPI.Models;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Options;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -23,12 +24,17 @@ namespace MarketingSpeedAPI.Controllers
         private readonly string _apiKey;
         private readonly ILogger<MessagingController> _logger;
         private readonly IServiceProvider _serviceProvider;
-        public MessagingController(AppDbContext context, IOptions<WasenderSettings> wasenderOptions, IServiceProvider serviceProvider)
+        private readonly IMemoryCache _cache;
+
+        
+        public MessagingController(AppDbContext context, IOptions<WasenderSettings> wasenderOptions, IServiceProvider serviceProvider, IMemoryCache cache)
         {
             _context = context;
             _apiKey = wasenderOptions.Value.ApiKey;
             _client = new RestClient(wasenderOptions.Value.BaseUrl.TrimEnd('/'));
             _serviceProvider = serviceProvider;
+            _cache = cache;
+
         }
 
 
@@ -361,6 +367,122 @@ namespace MarketingSpeedAPI.Controllers
             await _context.SaveChangesAsync();
 
             return Ok(new { success = true, message = "Message deleted for all recipients" });
+        }
+
+        [HttpGet("subscription/has/{userId}")]
+        public async Task<IActionResult> HasSubscription(int userId)
+        {
+            var today = DateTime.Now.Date;
+
+            bool hasSubscription = await _context.UserSubscriptions.AnyAsync(s =>
+                s.UserId == userId &&
+                s.IsActive &&
+                s.PaymentStatus == "paid" &&
+                s.StartDate <= today &&
+                s.EndDate >= today
+            );
+
+            return Ok(new
+            {
+                success = true,
+                hasSubscription
+            });
+        }
+
+        [HttpGet("connection/status/{userId}")]
+        public async Task<IActionResult> CheckConnection(int userId)
+        {
+            var account = await _context.user_accounts
+                .AsNoTracking()
+                .FirstOrDefaultAsync(a => a.UserId == userId && a.PlatformId == 1);
+
+            if (account == null || string.IsNullOrEmpty(account.AccessToken))
+            {
+                return Ok(new
+                {
+                    success = true,
+                    isConnected = false
+                });
+            }
+
+            bool isConnected = false;
+
+            try
+            {
+                var client = new RestClient("https://gate.whapi.cloud/users/profile");
+                var request = new RestRequest();
+                request.AddHeader("authorization", $"Bearer {account.AccessToken}");
+
+                var res = await client.GetAsync(request);
+                isConnected = res.IsSuccessful;
+            }
+            catch { }
+
+            return Ok(new
+            {
+                success = true,
+                isConnected
+            });
+        }
+
+        [HttpGet("subscription/features/{userId}")]
+        public async Task<IActionResult> GetSubscriptionFeatures(int userId)
+        {
+            var today = DateTime.Now.Date;
+
+            var subscriptions = await _context.UserSubscriptions
+                .Where(s => s.UserId == userId &&
+                            s.IsActive &&
+                            s.PaymentStatus == "paid" &&
+                            s.StartDate <= today &&
+                            s.EndDate >= today)
+                .ToListAsync();
+
+            if (!subscriptions.Any())
+                return Ok(new { success = true, features = new List<object>() });
+
+            var packageIds = subscriptions.Select(s => s.PackageId).Distinct().ToList();
+            var subscriptionIds = subscriptions.Select(s => s.Id).ToList();
+
+            var features = await _context.PackageFeatures
+                .Where(f => packageIds.Contains(f.PackageId) && f.PlatformId == 1 && f.isMain)
+                .ToListAsync();
+
+            var usages = await _context.subscription_usage
+                .Where(u => u.UserId == userId && subscriptionIds.Contains(u.SubscriptionId))
+                .ToListAsync();
+
+            var result = new List<object>();
+
+            foreach (var sub in subscriptions)
+            {
+                foreach (var feature in features.Where(f => f.PackageId == sub.PackageId))
+                {
+                    var usage = usages.FirstOrDefault(u =>
+                        u.SubscriptionId == sub.Id && u.FeatureId == feature.Id);
+
+                    int used = usage?.UsedCount ?? 0;
+                    int remaining = Math.Max(feature.LimitCount - used, 0);
+
+                    result.Add(new
+                    {
+                        feature.FeatureEn,
+                        feature.feature,
+                        feature.forMembers,
+                        feature.forCreatingGroups,
+                        feature.forGetingGruops,
+                        LimitCount = feature.LimitCount,
+                        UsedCount = used,
+                        RemainingCount = remaining
+                    });
+                }
+            }
+
+            return Ok(new
+            {
+                success = true,
+                features = result
+            });
         }
 
 

@@ -72,38 +72,34 @@ namespace MarketingSpeedAPI.Controllers
         }
 
         // DELETE: api/sentMessages/{body}
-        [HttpDelete("{body}")]
-        public async Task<IActionResult> DeleteMessagesByBody(string body)
+        [HttpPost("delete-messages")]
+        public async Task<IActionResult> DeleteMessages([FromBody] DeleteMessagesRequest request)
         {
-            if (string.IsNullOrWhiteSpace(body))
-                return BadRequest(new { message = "Invalid message body" });
+            if (request.Bodies == null || !request.Bodies.Any())
+                return BadRequest(new { message = "Bodies list is empty" });
 
-            var normalizedBody = (body ?? "").Trim();
-
-            // ✅ تحميل السجلات بدون شرط على body داخل SQL
-            var logsRaw = await _context.message_logs
-     .Where(l => l.Status != "deleted" && EF.Property<string>(l, "body") != null)
-     .ToListAsync();
-
-            // ✅ فلترة null داخل الذاكرة (آمن)
-            var logs = logsRaw
-                .Where(l => l.body != null && l.body.Trim() == normalizedBody)
+            var normalizedBodies = request.Bodies
+                .Where(b => !string.IsNullOrWhiteSpace(b))
+                .Select(b => b.Trim())
                 .ToList();
 
-            if (!logs.Any())
-                return NotFound(new { message = "No messages found with this body" });
+            var affectedRows = await _context.message_logs
+                .Where(l =>
+                    l.Status != "deleted" &&
+                    l.body != null &&
+                    normalizedBodies.Contains(l.body.Trim())
+                )
+                .ExecuteUpdateAsync(s =>
+                    s.SetProperty(l => l.Status, "deleted")
+                );
 
-            foreach (var log in logs)
-            {
-                log.Status = "deleted";
-            }
-
-            await _context.SaveChangesAsync();
+            if (affectedRows == 0)
+                return NotFound(new { message = "No messages found" });
 
             return Ok(new
             {
-                message = $"Marked {logs.Count} messages as deleted.",
-                count = logs.Count
+                message = $"Deleted {affectedRows} messages",
+                count = affectedRows
             });
         }
 
