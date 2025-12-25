@@ -296,11 +296,11 @@ namespace MarketingSpeedAPI.Controllers
 
             // 🔹 نأتي بالرسائل المرسلة خلال هذا اليوم فقط
             var logs = await _context.message_logs
-                .Where(l => l.Status == "sent"
+                .Where(l => l.Status == "sent" || l.Status == "deleted"
                             && l.PlatformId == 1
                             && l.UserId == userId
                             && l.AttemptedAt >= startUtc
-                            && l.AttemptedAt < endUtc)
+                            && l.AttemptedAt < endUtc )
                 .Select(l => l.Recipient)
                 .ToListAsync();
 
@@ -324,7 +324,7 @@ namespace MarketingSpeedAPI.Controllers
 
             // ✅ نعتمد فقط على message_logs
             var logs = await _context.message_logs
-                .Where(l => l.UserId == userId && l.Status == "sent")
+                .Where(l => l.UserId == userId && l.Status == "sent" || l.Status == "deleted")
                 .Select(l => l.AttemptedAt)
                 .ToListAsync();
 
