@@ -296,7 +296,7 @@ namespace MarketingSpeedAPI.Controllers
 
             // 🔹 نأتي بالرسائل المرسلة خلال هذا اليوم فقط
             var logs = await _context.message_logs
-                .Where(l => l.Status == "sent" || l.Status == "deleted"
+                .Where(l => (l.Status == "sent" || l.Status == "deleted")
                             && l.PlatformId == 1
                             && l.UserId == userId
                             && l.AttemptedAt >= startUtc
@@ -322,11 +322,12 @@ namespace MarketingSpeedAPI.Controllers
         {
             var now = DateTime.UtcNow.Date;
 
-            // ✅ نعتمد فقط على message_logs
             var logs = await _context.message_logs
-                .Where(l => l.UserId == userId && l.Status == "sent" || l.Status == "deleted")
-                .Select(l => l.AttemptedAt)
-                .ToListAsync();
+            .Where(l => l.UserId == userId
+             && (l.Status == "sent" || l.Status == "deleted"))
+            .Select(l => l.AttemptedAt)
+            .ToListAsync();
+
 
             if (range == "day")
             {
