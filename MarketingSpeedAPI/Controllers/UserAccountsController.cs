@@ -142,10 +142,10 @@ namespace MarketingSpeedAPI.Controllers
                 var extendReq = new RestRequest($"/{newChannelId}/extend", Method.Post);
                 extendReq.AddHeader("accept", "application/json");
                 extendReq.AddHeader("authorization", authHeader);
-
+                remainingDays = remainingDays - 5;
                 extendReq.AddJsonBody(new
                 {
-                    days = (remainingDays - 5),
+                    days = remainingDays,
                     comment = $"{remainingDays} days restored"
                 });
 
