@@ -87,11 +87,10 @@ namespace MarketingSpeedAPI.Controllers
             try
             {
                 // 1️⃣ استعلام حالة الدفع من ميسّر
-                string secretKey = _settings.SecretKey; // مفتاح sk_test الكامل
+                string secretKey = _settings.SecretKey; 
                 var client = new RestClient($"https://api.moyasar.com/v1/payments/{req.PaymentId}");
 
                 var request = new RestRequest("", Method.Get);
-                // لاحظ: نمرر "" أو null كـ endpoint
 
                 string auth = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes($"{secretKey}:"));
                 request.AddHeader("Authorization", "Basic " + auth);
@@ -125,6 +124,26 @@ namespace MarketingSpeedAPI.Controllers
                 if (package == null)
                     return BadRequest(new { message = "Package not found" });
 
+                var extraDays = 0;
+
+                // البحث عن الكوبون
+                Marketer marketer = null;
+
+                if (!string.IsNullOrWhiteSpace(req.coupon))
+                {
+                    marketer = await _context.Marketers
+                        .FirstOrDefaultAsync(m =>
+                            m.PromoCode == req.coupon &&
+                            !m.IsFrozen &&
+                            !m.IsDeleted
+                        );
+
+                    if (marketer != null)
+                    {
+                        extraDays = 3;
+                    }
+                }
+
                 var subscription = new UserSubscription
                 {
                     UserId = req.UserId,
@@ -132,7 +151,7 @@ namespace MarketingSpeedAPI.Controllers
                     PlanName = package.Name,
                     Price = package.Price,
                     StartDate = DateTime.UtcNow,
-                    EndDate = DateTime.UtcNow.AddDays(package.DurationDays),
+                    EndDate = DateTime.UtcNow.AddDays(package.DurationDays + extraDays),
                     PaymentStatus = "paid",
                     IsActive = true,
                     CreatedAt = DateTime.UtcNow,

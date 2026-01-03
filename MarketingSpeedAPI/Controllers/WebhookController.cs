@@ -26,41 +26,37 @@ public class WebhookController : ControllerBase
     }
 
     [HttpPost]
-    public async Task<IActionResult> Receive()
+    public async Task<IActionResult> Receive([FromBody] JsonElement root)
     {
-        string body;
-        using (var reader = new StreamReader(Request.Body))
-        {
-            body = await reader.ReadToEndAsync();
-        }
-
-        // لا يوجد توقيع في Whapi
-        var root = JsonDocument.Parse(body).RootElement;
-
-        if (!root.TryGetProperty("messages", out var messagesArray))
+        if (!root.TryGetProperty("messages", out var messagesArray) ||
+            messagesArray.GetArrayLength() == 0)
             return Ok(new { ignored = "no_messages" });
 
         var messageObj = messagesArray[0];
 
-        string chatId = messageObj.GetProperty("chat_id").GetString();
-        string from = messageObj.GetProperty("from").GetString();
-        string fromName = messageObj.TryGetProperty("from_name", out var name) ? name.GetString() : null;
-
         bool fromMe = messageObj.GetProperty("from_me").GetBoolean();
-        string type = messageObj.GetProperty("type").GetString();
+        string chatId = messageObj.GetProperty("chat_id").GetString();
 
-        // تجاهل المجموعات
-        if (chatId.EndsWith("@g.us") || fromMe)
-            return Ok(new { ignored = "group_message" });
+        // تجاهل المجموعات أو رسائل النظام
+        if (fromMe || chatId.EndsWith("@g.us"))
+            return Ok(new { ignored = "group_or_self" });
+
+        string from = messageObj.GetProperty("from").GetString();
+        string fromName = messageObj.TryGetProperty("from_name", out var name)
+            ? name.GetString()
+            : null;
 
         // تنظيف الرقم
         string cleanNumber = new string(from.Where(char.IsDigit).ToArray());
-        if (string.IsNullOrWhiteSpace(cleanNumber) || !allowedPrefixes.Any(p => cleanNumber.StartsWith(p)))
+        if (string.IsNullOrWhiteSpace(cleanNumber) ||
+            !allowedPrefixes.Any(p => cleanNumber.StartsWith(p)))
             return Ok(new { ignored = "invalid_prefix" });
 
         string text = ExtractWhapiMessageText(messageObj);
 
-        // الحصول على الحساب المرتبط بالقناة
+        if (string.IsNullOrWhiteSpace(text))
+            return Ok(new { ignored = "empty_text" });
+
         string channelId = root.GetProperty("channel_id").GetString();
 
         var account = await _db.user_accounts
@@ -69,13 +65,12 @@ public class WebhookController : ControllerBase
         if (account == null)
             return Ok(new { ignored = "no_matching_account" });
 
-        // تخزين الرسالة
         var msg = new ChatMessage
         {
             MessageId = messageObj.GetProperty("id").GetString(),
             UserPhone = cleanNumber,
             Text = text,
-            IsSentByMe = fromMe,
+            IsSentByMe = false,
             Timestamp = DateTime.UtcNow,
             IsRaeded = false,
             channelId = account.channelId,
@@ -86,9 +81,6 @@ public class WebhookController : ControllerBase
         _db.ChatMessages.Add(msg);
         await _db.SaveChangesAsync();
 
-
-
-        // إرسال لـ SignalR
         await _hub.Clients.Group($"session_{account.channelId}")
             .SendAsync("ReceiveMessage",
                 msg.UserPhone,

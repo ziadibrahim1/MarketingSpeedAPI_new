@@ -790,6 +790,11 @@ namespace MarketingSpeedAPI.Controllers
             };
 
             _context.conversation_messages.Add(message);
+            var conversation = await _context.Conversations.FindAsync(id);
+            if (conversation != null)
+            {
+                conversation.HasUnread = true;
+            }
             await _context.SaveChangesAsync();
 
             return Ok(message);

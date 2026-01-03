@@ -13,6 +13,8 @@
     public class VerifyPaymentRequest
     {
         public string PaymentId { get; set; }
+        public string? coupon { get; set; }
+
         public int UserId { get; set; }
         public int PackageId { get; set; }
     }

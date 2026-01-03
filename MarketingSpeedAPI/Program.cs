@@ -5,116 +5,138 @@ using MarketingSpeedAPI.Models;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 
- 
-
 var builder = WebApplication.CreateBuilder(args);
 
-// 1️⃣ Database (مع تفعيل إعادة المحاولة + رفع الوقت)
-builder.Services.AddDbContext<AppDbContext>(options =>
+#region Database (DbContext Pool + Retry + Timeout)
+builder.Services.AddDbContextPool<AppDbContext>(options =>
 {
     options.UseMySql(
         builder.Configuration.GetConnectionString("DefaultConnection"),
         new MySqlServerVersion(new Version(8, 0, 26)),
         mySqlOptions =>
         {
-            // ⚡️ أهم شيء لمنع انهيار الاتصال
             mySqlOptions.EnableRetryOnFailure(
                 maxRetryCount: 5,
                 maxRetryDelay: TimeSpan.FromSeconds(10),
                 errorNumbersToAdd: null
             );
 
-            // ⛔ منع timeout من EF Core
             mySqlOptions.CommandTimeout(60);
         }
     );
 });
+#endregion
 
-// 2️⃣ Services
-builder.Services.Configure<EmailSettings>(builder.Configuration.GetSection("EmailSettings"));
+#region Services & Options
+builder.Services.Configure<EmailSettings>(
+    builder.Configuration.GetSection("EmailSettings"));
 builder.Services.AddScoped<EmailService>();
-builder.Services.Configure<WasenderSettings>(builder.Configuration.GetSection("Wasender"));
 
-// 3️⃣ Controllers
-builder.Services.AddControllers();
-
-// 4️⃣ Logging
-builder.Logging.ClearProviders();
-builder.Logging.AddConsole();
-
-// 5️⃣ Memory Cache
-builder.Services.AddMemoryCache();
-
-// 6️⃣ Hosted Services
-builder.Services.AddHostedService<DeleteUnverifiedUsersJob>();
-
-// 7️⃣ HttpClient
-builder.Services.AddHttpClient("Wasender", client =>
-{
-    client.BaseAddress = new Uri(builder.Configuration["Wasender:BaseUrl"] ?? "https://www.wasenderapi.com");
-    client.DefaultRequestHeaders.Add("Authorization", $"Bearer {builder.Configuration["Wasender:ApiKey"]}");
-});
-
+builder.Services.Configure<WasenderSettings>(
+    builder.Configuration.GetSection("Wasender"));
 
 builder.Services.Configure<MoyasarSettings>(
     builder.Configuration.GetSection("Moyasar"));
 
-builder.Services.AddDbContext<AppDbContext>(options =>
+builder.Services.Configure<TelegramOptions>(
+    builder.Configuration.GetSection("Telegram"));
+#endregion
+
+#region Controllers
+builder.Services.AddControllers();
+#endregion
+
+#region Logging (Safe for Production)
+builder.Logging.ClearProviders();
+if (builder.Environment.IsDevelopment())
 {
-    options.UseMySql(
-        builder.Configuration.GetConnectionString("DefaultConnection"),
-        new MySqlServerVersion(new Version(8, 0, 26))
-    );
+    builder.Logging.AddConsole();
+}
+#endregion
+
+#region Memory Cache (With Limit)
+builder.Services.AddMemoryCache(options =>
+{
+    options.SizeLimit = 100 * 1024 * 1024; // 100 MB
 });
+#endregion
 
+#region Hosted Services
+builder.Services.AddHostedService<DeleteUnverifiedUsersJob>();
+#endregion
 
+#region HttpClient
+builder.Services.AddHttpClient("Wasender", client =>
+{
+    client.BaseAddress = new Uri(
+        builder.Configuration["Wasender:BaseUrl"] ??
+        "https://www.wasenderapi.com");
 
+    client.DefaultRequestHeaders.Add(
+        "Authorization",
+        $"Bearer {builder.Configuration["Wasender:ApiKey"]}");
+});
+#endregion
 
-// 8️⃣ CORS
+#region CORS
 builder.Services.AddCors(options =>
 {
-    options.AddPolicy("AllowAll",
-        policy => policy
-            .AllowAnyHeader()
-            .AllowAnyMethod()
-            .AllowCredentials()
-            .SetIsOriginAllowed(_ => true));
+    options.AddPolicy("AllowAll", policy =>
+        policy.AllowAnyHeader()
+              .AllowAnyMethod()
+              .AllowCredentials()
+              .SetIsOriginAllowed(_ => true));
 });
+#endregion
 
-// 9️⃣ Telegram Manager
-builder.Services.Configure<TelegramOptions>(builder.Configuration.GetSection("Telegram"));
+#region Telegram Manager
 builder.Services.AddSingleton<Func<TelegramClientManager>>(sp =>
 {
     return () =>
     {
-        var opts = sp.GetRequiredService<IOptions<TelegramOptions>>().Value;
-        return new TelegramClientManager(opts.ApiId, opts.ApiHash, opts.BaseDataDir);
+        var opts = sp
+            .GetRequiredService<IOptions<TelegramOptions>>()
+            .Value;
+
+        return new TelegramClientManager(
+            opts.ApiId,
+            opts.ApiHash,
+            opts.BaseDataDir);
     };
 });
+#endregion
 
+#region SignalR
 builder.Services.AddSignalR();
+#endregion
 
-// 🔟 Kestrel
+#region Kestrel
 builder.WebHost.UseKestrel(options =>
 {
-    options.ListenAnyIP(80);  // HTTP
+    options.ListenAnyIP(80); // HTTP
 });
+#endregion
 
-// 1️⃣1️⃣ Build app
+#region Build
 var app = builder.Build();
+#endregion
 
+#region Middleware
 app.UseCors("AllowAll");
 app.UseStaticFiles();
 app.UseAuthorization();
+#endregion
 
-// 1️⃣2️⃣ Map Controllers + Hubs
+#region Endpoints
 app.MapControllers();
 app.MapHub<ChatHub>("/chathub");
+#endregion
 
-// 1️⃣3️⃣ Developer mode
+#region Development
 if (app.Environment.IsDevelopment())
 {
     app.UseDeveloperExceptionPage();
 }
+#endregion
 
 app.Run();

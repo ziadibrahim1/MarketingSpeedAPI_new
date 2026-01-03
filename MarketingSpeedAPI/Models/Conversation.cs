@@ -13,6 +13,7 @@ namespace MarketingSpeedAPI.Models
         public int? DurationMinutes { get; set; }
         public List<MessageDto> Messages { get; set; }
         public User User { get; set; }
+        public bool? HasUnread { get; set; }
 
         // 👈 العلاقة مع موظف الدعم
         public support_agents Agent { get; set; }

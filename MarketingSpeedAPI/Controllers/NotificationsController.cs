@@ -17,17 +17,41 @@ public class NotificationsController : ControllerBase
     [HttpGet("user/{userId}")]
     public async Task<IActionResult> GetUserNotifications(int userId)
     {
-        var notifications = await _context.user_notifications
-            .Where(un => un.UserId == userId ||  un.UserId == 1 )
-            .Include(un => un.Notification)
-            .OrderByDescending(un => un.Notification.CreatedAt)
-            .Select(un => new NotificationDto
+        var hasActiveSubscription = await _context.UserSubscriptions.AnyAsync(us =>
+            us.UserId == userId &&
+            us.IsActive == true &&
+            us.PaymentStatus == "paid" &&
+            us.StartDate <= DateTime.UtcNow &&
+            us.EndDate >= DateTime.UtcNow
+        );
+
+        var hasConnectedAccount = await _context.user_accounts.AnyAsync(ua =>
+            ua.UserId == userId &&
+            ua.Status == "connected"
+        );
+
+        var notifications = await _context.Notifications
+            .Where(n =>
+                n.Destination == "in_app" && (n.ScheduleAt == null || n.ScheduleAt <= DateTime.UtcNow) &&
+                (
+                    n.TargetAudience == "all" ||
+
+                    (n.TargetAudience == "subscribers" && hasActiveSubscription) ||
+
+                    (n.TargetAudience == "whaUsers" && hasConnectedAccount) ||
+
+                    (n.TargetAudience == "non_users" && !hasConnectedAccount)
+                )
+            )
+            
+            .OrderByDescending(n => n.CreatedAt)
+            .Select(n => new NotificationDto
             {
-                Id = un.Notification.Id,
-                Title = un.Notification.Title,
-                body = un.Notification.Message,
-                dateTime = un.Notification.CreatedAt,
-                IsRead = un.IsRead 
+                Id = n.Id,
+                Title = n.Title,
+                body = n.Message,
+                dateTime = n.CreatedAt,
+                IsRead = false  
             })
             .ToListAsync();
 
