@@ -478,16 +478,7 @@ namespace MarketingSpeedAPI.Controllers
                 // =============================
                 // 🟢 سجل مغادرة المجموعة في LeftGroups
                 // =============================
-                var leftGroup = new LeftGroup
-                {
-                    UserId = (int)userId,
-                    GroupId = req.Jid,
-                    GroupName = req.GroupName ?? "",
-                    InviteLink = inviteCode,  // ❗ inviteCode الوهمي
-                    LeftAt = DateTime.UtcNow
-                };
-
-                _context.LeftGroups.Add(leftGroup);
+               
                 await _context.SaveChangesAsync();
 
                 return Ok(new

@@ -7,8 +7,9 @@
         public string Title { get; set; } = string.Empty;
 
         public string Message { get; set; } = string.Empty;
+        public int? PackageId { get; set; }
 
-        public string TargetAudience { get; set; } = "all";
+        public string? TargetAudience { get; set; } = "all";
 
         public DateTime? ScheduleAt { get; set; }
 

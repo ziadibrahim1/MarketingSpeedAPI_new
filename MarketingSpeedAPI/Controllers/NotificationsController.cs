@@ -30,6 +30,17 @@ public class NotificationsController : ControllerBase
             ua.Status == "connected"
         );
 
+        var activePackageIds = await _context.UserSubscriptions
+        .Where(us =>
+            us.UserId == userId &&
+            us.IsActive &&
+            us.PaymentStatus == "paid" &&
+            us.StartDate <= DateTime.UtcNow &&
+            us.EndDate >= DateTime.UtcNow
+        )
+        .Select(us => us.PackageId)
+        .ToListAsync();
+
         var notifications = await _context.Notifications
             .Where(n =>
                 n.Destination == "in_app" && (n.ScheduleAt == null || n.ScheduleAt <= DateTime.UtcNow) &&
@@ -40,7 +51,7 @@ public class NotificationsController : ControllerBase
 
                     (n.TargetAudience == "whaUsers" && hasConnectedAccount) ||
 
-                    (n.TargetAudience == "non_users" && !hasConnectedAccount)
+                    (n.TargetAudience == "non_users" && !hasConnectedAccount) ||(n.TargetAudience == "package" && activePackageIds.Contains((int)n.PackageId))
                 )
             )
             

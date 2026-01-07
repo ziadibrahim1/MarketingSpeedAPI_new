@@ -566,7 +566,7 @@ namespace MarketingSpeedAPI.Controllers
                 try
                 {
                     account.Status = "disconnected";
-                    // لو تريد تصفير الجلسة:
+                
                     // account.WasenderSessionId = null;
 
                     _context.user_accounts.Update(account);
@@ -596,7 +596,7 @@ namespace MarketingSpeedAPI.Controllers
             }
 
             // ====================================================
-            //       استرجاع الميزات والاستخدام كما في كودك
+            //     
             // ====================================================
             var packageIds = subscriptions.Select(s => s.PackageId).Distinct().ToList();
 
@@ -604,11 +604,22 @@ namespace MarketingSpeedAPI.Controllers
                 .Where(f => packageIds.Contains(f.PackageId) && f.PlatformId == 1 && f.isMain == true)
                 .AsNoTracking()
                 .ToListAsync();
+            
 
             var subscriptionIds = subscriptions.Select(s => s.Id).ToList();
 
             var usages = await _context.subscription_usage
                 .Where(u => u.UserId == (int)userId && subscriptionIds.Contains(u.SubscriptionId))
+                .AsNoTracking()
+                .ToListAsync();
+
+            var grants = await _context.subscription_feature_grants
+                .Where(g =>
+                g.UserId == userId &&
+                subscriptionIds.Contains((int)g.SubscriptionId) &&
+                g.IsActive &&
+                (g.EndDate == null || g.EndDate > DateTime.Now)
+                 )
                 .AsNoTracking()
                 .ToListAsync();
 
@@ -621,8 +632,24 @@ namespace MarketingSpeedAPI.Controllers
                     var usage = usages.FirstOrDefault(u => u.SubscriptionId == sub.Id && u.FeatureId == feature.Id);
 
                     int used = usage?.UsedCount ?? 0;
-                    int limit = feature.LimitCount;
-                    int remaining = Math.Max(limit - used, 0);
+
+                    // 🔹 limit الأساسي من الباقة
+                    int baseLimit = feature.LimitCount;
+
+                    // 🔹 مجموع الهدايا النشطة
+                    int extraGranted = grants
+                        .Where(g =>
+                            g.SubscriptionId == sub.Id &&
+                            g.FeatureId == (uint)feature.Id
+                        )
+                        .Sum(g => Math.Max(g.GrantedCount - g.UsedCount, 0));
+
+                    // 🔹 limit النهائي
+                    int finalLimit = baseLimit + extraGranted;
+
+                    // 🔹 المتبقي
+                    int remaining = Math.Max(finalLimit - used, 0);
+
 
                     result.Add(new
                     {
@@ -640,11 +667,12 @@ namespace MarketingSpeedAPI.Controllers
                         forCreatingGroups = feature.forCreatingGroups,
                         forGetingGroups = feature.forGetingGruops,
 
-                        LimitCount = feature.LimitCount,
+                        LimitCount = feature.LimitCount,   
                         UsedCount = used,
-                        RemainingCount = remaining,
+                        RemainingCount = remaining,       
                         IsExceeded = remaining <= 0
                     });
+
                 }
             }
 

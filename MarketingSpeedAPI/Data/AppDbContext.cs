@@ -15,6 +15,7 @@ namespace MarketingSpeedAPI.Data
         public DbSet<Conversation> Conversations { get; set; }
         public DbSet<AppUser> AppUsers { get; set; }
         public DbSet<Marketer> Marketers { get; set; }
+        public DbSet<SubscriptionFeatureGrant> subscription_feature_grants { get; set; }
         public DbSet<conversation_messages> conversation_messages { get; set; }
         public DbSet<SocialAccount> social_accounts { get; set; }
         public DbSet<DirectContact> direct_contacts { get; set; }
