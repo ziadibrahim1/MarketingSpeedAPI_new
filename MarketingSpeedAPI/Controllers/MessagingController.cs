@@ -2163,54 +2163,157 @@ namespace MarketingSpeedAPI.Controllers
 
             string? finalText = !string.IsNullOrWhiteSpace(req.Message) ? SpinText(req.Message) : null;
             bool hasAttachment = req.ImageUrls != null && req.ImageUrls.Any();
-            string endpoint = "";
-            string recipient = req.GroupId;
-            string? externalId = null;
 
-            var body = new Dictionary<string, object?> { { "to", recipient } };
+            bool overallSuccess = true;
+            bool blocked = false;
+            string? errorMessage = null;
+            List<string> externalIds = new List<string>();
 
             // ----------------------------------------
-            //       تحديد نوع الرسالة
+            //  إرسال الرسائل (نص أو media متعددة)
             // ----------------------------------------
-            if (hasAttachment)
+            if (hasAttachment && req.ImageUrls.Count > 0)
             {
-                string mediaUrl = req.ImageUrls.First();
-                string ext = Path.GetExtension(mediaUrl).ToLower();
+                // إرسال كل صورة/ملف في رسالة منفصلة
+                for (int i = 0; i < req.ImageUrls.Count; i++)
+                {
+                    string mediaUrl = req.ImageUrls[i];
+                    string ext = Path.GetExtension(mediaUrl).ToLower();
+                    string endpoint = "";
+                    var body = new Dictionary<string, object?> { { "to", req.GroupId } };
 
-                if (ext is ".jpg" or ".jpeg" or ".png")
-                {
-                    endpoint = "messages/image";
-                    body["media"] = mediaUrl;
-                    if (finalText != null) body["caption"] = finalText;
+                    // تحديد نوع الملف
+                    bool isLastMedia = (i == req.ImageUrls.Count - 1);
+
+                    if (ext is ".jpg" or ".jpeg" or ".png")
+                    {
+                        endpoint = "messages/image";
+                        body["media"] = mediaUrl;
+                        // Caption فقط في آخر رسالة
+                        if (isLastMedia && finalText != null) body["caption"] = finalText;
+                    }
+                    else if (ext == ".mp4")
+                    {
+                        endpoint = "messages/video";
+                        body["media"] = mediaUrl;
+                        if (isLastMedia && finalText != null) body["caption"] = finalText;
+                    }
+                    else if (ext == ".pdf" || ext == ".docx")
+                    {
+                        endpoint = "messages/document";
+                        body["media"] = mediaUrl;
+                        body["mimetype"] = ext == ".pdf"
+                            ? "application/pdf"
+                            : "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+                        if (isLastMedia && finalText != null) body["caption"] = finalText;
+                    }
+                    else
+                    {
+                        // لو الامتداد مش معروف، نتخطى الملف ده
+                        continue;
+                    }
+
+                    // إرسال الرسالة
+                    var result = await SendMediaMessage(account, endpoint, body);
+
+                    if (!result.success)
+                    {
+                        overallSuccess = false;
+                        errorMessage = result.error;
+                        blocked = result.blocked;
+
+                        // لو في blocking أو خطأ حرج، نوقف
+                        if (blocked) break;
+                    }
+                    else if (result.externalId != null)
+                    {
+                        externalIds.Add(result.externalId);
+                    }
+
+                    // تسجيل لوج لآخر رسالة فقط
+                    if (isLastMedia)
+                    {
+                        await LogMessage(
+                            userId,
+                            (ulong?)req.MainMessageId,
+                            req.GroupId,
+                            account,
+                            req.Message,
+                            req.fromChates,
+                            result.success,
+                            result.error,
+                            result.externalId
+                        );
+                    }
+
+                    // تأخير صغير بين الرسائل (300ms)
+                    if (i < req.ImageUrls.Count - 1)
+                        await Task.Delay(300);
                 }
-                else if (ext == ".mp4")
+
+                // لو في نص ومفيش caption اتحط (يعني كل الملفات فشلت)، نرسل النص في رسالة منفصلة
+                if (finalText != null && externalIds.Count == 0)
                 {
-                    endpoint = "messages/video";
-                    body["media"] = mediaUrl;
-                    if (finalText != null) body["caption"] = finalText;
-                }
-                else if (ext == ".pdf" || ext == ".docx")
-                {
-                    endpoint = "messages/document";
-                    body["media"] = mediaUrl;
-                    body["mimetype"] = ext == ".pdf" ? "application/pdf" : "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
-                    if (finalText != null) body["caption"] = finalText;
-                }
-                else
-                {
-                    endpoint = "messages/text";
-                    body["body"] = finalText ?? "";
+                    await Task.Delay(300);
+                    var textResult = await SendTextMessage(account, req.GroupId, finalText);
+                    if (textResult.externalId != null)
+                        externalIds.Add(textResult.externalId);
+
+                    // تسجيل لوج للرسالة النصية (لأن مفيش صور اتبعتت)
+                    await LogMessage(
+                        userId,
+                        (ulong?)req.MainMessageId,
+                        req.GroupId,
+                        account,
+                        req.Message,
+                        req.fromChates,
+                        textResult.success,
+                        textResult.error,
+                        textResult.externalId
+                    );
                 }
             }
-            else
+            else if (!string.IsNullOrEmpty(finalText))
             {
-                endpoint = "messages/text";
-                body["body"] = finalText ?? "";
+                // رسالة نصية فقط
+                var result = await SendTextMessage(account, req.GroupId, finalText);
+                overallSuccess = result.success;
+                errorMessage = result.error;
+                blocked = result.blocked;
+                if (result.externalId != null)
+                    externalIds.Add(result.externalId);
+
+                // تسجيل لوج للرسالة النصية
+                await LogMessage(
+                    userId,
+                    (ulong?)req.MainMessageId,
+                    req.GroupId,
+                    account,
+                    req.Message,
+                    req.fromChates,
+                    result.success,
+                    result.error,
+                    result.externalId
+                );
             }
 
-            // ----------------------------------------
-            //       إنشاء الطلب
-            // ----------------------------------------
+            return Ok(new
+            {
+                success = overallSuccess,
+                req.MainMessageId,
+                blocked,
+                error = errorMessage,
+                externalIds,
+                sentCount = externalIds.Count
+            });
+        }
+
+        // ----------------------------------------
+        //       Helper Methods
+        // ----------------------------------------
+        private async Task<(bool success, bool blocked, string? error, string? externalId)>
+            SendMediaMessage(dynamic account, string endpoint, Dictionary<string, object?> body)
+        {
             var client = new RestClient(new RestClientOptions("https://gate.whapi.cloud"));
             var sendReq = new RestRequest(endpoint, Method.Post);
 
@@ -2222,10 +2325,8 @@ namespace MarketingSpeedAPI.Controllers
             bool success = false;
             bool blocked = false;
             string? errorMessage = null;
+            string? externalId = null;
 
-            // ----------------------------------------
-            //       إعادة المحاولة مرتين مثل member
-            // ----------------------------------------
             for (int attempt = 0; attempt < 2; attempt++)
             {
                 var res = await client.ExecuteAsync(sendReq);
@@ -2249,31 +2350,55 @@ namespace MarketingSpeedAPI.Controllers
                     catch { }
                 }
 
-                blocked =
-                    !success &&
-                    (
-                        (errorMessage?.Contains("Recipient_not_found", StringComparison.OrdinalIgnoreCase) ?? false) ||
-                        (errorMessage?.Contains("blocked", StringComparison.OrdinalIgnoreCase) ?? false)
-                    );
+                blocked = !success && (
+                    (errorMessage?.Contains("Recipient_not_found", StringComparison.OrdinalIgnoreCase) ?? false) ||
+                    (errorMessage?.Contains("blocked", StringComparison.OrdinalIgnoreCase) ?? false)
+                );
 
                 break;
             }
 
-            // ----------------------------------------
-            //       تسجيل اللوج
-            // ----------------------------------------
+            return (success, blocked, errorMessage, externalId);
+        }
+
+        private async Task<(bool success, bool blocked, string? error, string? externalId)>
+            SendTextMessage(dynamic account, string recipient, string text)
+        {
+            var body = new Dictionary<string, object?>
+    {
+        { "to", recipient },
+        { "body", text }
+    };
+
+            return await SendMediaMessage(account, "messages/text", body);
+        }
+
+        // ----------------------------------------
+        //       تسجيل اللوج لكل رسالة
+        // ----------------------------------------
+        private async Task LogMessage(
+            ulong userId,
+            ulong? mainMessageId,
+            string groupId,
+            dynamic account,
+            string? message,
+            bool? fromChates,
+            bool success,
+            string? error,
+            string? externalId)
+        {
             try
             {
                 var log = new MessageLog
                 {
-                    MessageId = (int)(req.MainMessageId ?? 0),
-                    Recipient = req.GroupId,
+                    MessageId = (int)(mainMessageId ?? 0),
+                    Recipient = groupId,
                     sender = NormalizePhone(account.AccountIdentifier),
                     UserId = (int)userId,
-                    body = req.Message,
-                    PlatformId = req.fromChates == true ? 3 : account.PlatformId,
+                    body = message,
+                    PlatformId = fromChates == true ? 3 : account.PlatformId,
                     Status = success ? "sent" : "failed",
-                    ErrorMessage = errorMessage,
+                    ErrorMessage = error,
                     AttemptedAt = DateTime.Now,
                     ExternalMessageId = externalId
                 };
@@ -2282,17 +2407,7 @@ namespace MarketingSpeedAPI.Controllers
                 await _context.SaveChangesAsync();
             }
             catch { }
-
-            return Ok(new
-            {
-                success,
-                req.MainMessageId,
-                blocked,
-                error = errorMessage,
-                externalId
-            });
         }
-
 
         [HttpGet("daily-limit/{userId}")]
         public async Task<IActionResult> GetDailyLimit(ulong userId)
