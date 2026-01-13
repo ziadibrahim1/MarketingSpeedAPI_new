@@ -892,7 +892,7 @@ namespace MarketingSpeedAPI.Controllers
                     id = n.Id,
                     title = n.Title,
                     message = n.Message,
-                    createdAt = n.CreatedAt
+                    createdAt = n.CreatedAt,
                 })
                 .ToListAsync();
 

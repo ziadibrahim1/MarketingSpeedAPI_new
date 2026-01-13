@@ -24,7 +24,24 @@ namespace MarketingSpeedAPI.Controllers
             if (!Directory.Exists(uploadsPath))
                 Directory.CreateDirectory(uploadsPath);
 
-            var allowedExts = new[] { ".jpg", ".jpeg", ".png", ".gif", ".webp" };
+            var allowedExts = new[]
+            {
+                // 🖼️ Images
+            ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg",
+
+                // 🎬 Videos
+            ".mp4", ".avi", ".mkv", ".mov", ".wmv", ".flv", ".webm", ".mpeg", ".mpg", ".3gp",
+
+                // 🎵 Audio
+            ".mp3", ".wav", ".aac", ".ogg", ".flac", ".wma", ".m4a", ".amr",
+
+                // 📄 Documents
+            ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".txt", ".csv", ".rtf",
+
+                // 🗜️ Compressed files ()
+            ".zip", ".rar", ".7z"
+            };
+
             var ext = Path.GetExtension(file.FileName).ToLowerInvariant();
 
             if (!allowedExts.Contains(ext))

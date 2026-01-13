@@ -62,7 +62,8 @@ public class NotificationsController : ControllerBase
                 Title = n.Title,
                 body = n.Message,
                 dateTime = n.CreatedAt,
-                IsRead = false  
+                IsRead = false,
+                ar = n.ar
             })
             .ToListAsync();
 

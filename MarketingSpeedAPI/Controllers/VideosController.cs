@@ -1,4 +1,5 @@
 ﻿using MarketingSpeedAPI.Data;
+using Microsoft.AspNet.SignalR.Hubs;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
@@ -27,6 +28,8 @@ namespace MarketingSpeedAPI.Controllers
                 Id = c.Id,
                 Name = c.Name,
                 Description = c.Description,
+                NameEN = c.NameEN,
+                DescriptionEN = c.DescriptionEN,
                 Videos = c.Videos
                 .Where(c=>c.IsActive)
                 .Select(v => new

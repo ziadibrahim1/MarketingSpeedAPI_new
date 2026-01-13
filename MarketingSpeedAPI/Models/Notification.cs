@@ -15,6 +15,7 @@
 
         public string Destination { get; set; } = "in_app";
 
+        public bool? ar { get; set; }
         public DateTime CreatedAt { get; set; } = DateTime.Now;
 
         public DateTime UpdatedAt { get; set; } = DateTime.Now;
@@ -46,6 +47,7 @@
         public string body { get; set; }
         public DateTime dateTime { get; set; }
         public bool IsRead { get; set; }   // حالة القراءة الخاصة باليوزر
+        public bool? ar { get; set; }   // حالة القراءة الخاصة باليوزر
     }
 
     // لإنشاء إشعار جديد
