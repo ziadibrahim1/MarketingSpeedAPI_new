@@ -20,7 +20,7 @@ namespace MarketingSpeedAPI.Controllers
         public async Task<IActionResult> GetVideos()
         {
             var categories = await _context.video_categories
-                .Include(c => c.Videos.Where(v => v.IsActive))
+                .Include(c => c.Videos.Where(v => v.IsActive)).OrderBy(c => c.Index)
                 .ToListAsync();
 
             var result = categories.Select(c => new

@@ -8,6 +8,7 @@
         public string? Description { get; set; }
         public string? DescriptionEN { get; set; }
         public ICollection<TutorialVideo>? Videos { get; set; }
+        public int? Index { get; set; }
     }
 
     public class TutorialVideo

@@ -55,7 +55,7 @@ public class NotificationsController : ControllerBase
                 )
             )
             
-            .OrderByDescending(n => n.CreatedAt)
+            .OrderByDescending(n => n.CreatedAt).Reverse()
             .Select(n => new NotificationDto
             {
                 Id = n.Id,

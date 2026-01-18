@@ -827,6 +827,78 @@ namespace MarketingSpeedAPI.Controllers
             return Ok(result);
         }
 
+        [HttpGet("groupsdelte/{userId}/{platformId}")]
+        public async Task<IActionResult> GetGroupsForDelete(ulong userId, int platformId)
+        {
+            var account = await _context.user_accounts
+                .FirstOrDefaultAsync(a => a.UserId == (int)userId && a.PlatformId == platformId);
+
+            if (account == null || string.IsNullOrEmpty(account.AccessToken))
+                return NotFound(new { success = false, message = "No active session" });
+
+            var result = new List<object>();
+
+            int offset = 0;
+            int total = 0;
+
+            do
+            {
+                var client = new RestClient($"https://gate.whapi.cloud/groups?count=500&offset={offset}");
+                var request = new RestRequest("", Method.Get);
+                request.AddHeader("accept", "application/json");
+                request.AddHeader("authorization", $"Bearer {account.AccessToken}");
+
+                var response = await client.ExecuteAsync(request);
+
+                if (!response.IsSuccessful)
+                    return StatusCode((int)response.StatusCode, response.Content);
+
+                var json = JObject.Parse(response.Content);
+
+                var groupsArray = json["groups"]?.ToArray();
+                total = json["total"]?.ToObject<int>() ?? 0;
+
+                if (groupsArray != null)
+                {
+                    foreach (var g in groupsArray)
+                    {
+                        string id = g["id"]?.ToString();
+                        string name = g["name"]?.ToString();
+                        string participantCountStr = g["participants_count"]?.ToString();
+
+                        if (string.IsNullOrEmpty(id))
+                            continue;
+                         
+                        // ❌ تجاهل المجموعات من نوع Restricted + Announcements
+                        bool isRestricted = g["restricted"]?.ToObject<bool>() ?? false;
+                        bool isAnnouncements = g["announcements"]?.ToObject<bool>() ?? false;
+                        bool isCommunityAnnounce = g["isCommunityAnnounce"]?.ToObject<bool>() ?? false;
+                        bool not_spam = g["not_spam"]?.ToObject<bool>() ?? false;
+                        if (isRestricted && isAnnouncements || isCommunityAnnounce || not_spam == false)
+                            continue;
+
+                        result.Add(new
+                        {
+                            id = id,
+                            name = name,
+                            participantCount = participantCountStr != null ? int.Parse(participantCountStr) : 0
+                        });
+                    }
+                }
+
+                offset += 500;
+
+            } while (offset < total);
+
+            // إزالة التكرارات كما في الكود القديم
+            result = result
+                .GroupBy(g => g.GetType().GetProperty("id").GetValue(g))
+                .Select(g => g.First())
+                .ToList();
+
+            return Ok(result);
+        }
+
         [HttpGet("groups-member/{userId}/{platformId}")]
         public async Task<IActionResult> GetMemberGroups(ulong userId, int platformId)
         {
