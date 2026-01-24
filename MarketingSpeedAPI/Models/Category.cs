@@ -9,7 +9,7 @@
         public string? hint { get; set; }
         public string? Description { get; set; }  // وصف المجال (اختياري)
         public bool IsActive { get; set; } = true;  // هل المجال متاح
-        public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+        public DateTime CreatedAt { get; set; } = DateTime.Now;
         public ICollection<MarketingMessage> MarketingMessages { get; set; }
     }
     public class MarketingMessage

@@ -106,7 +106,7 @@ namespace MarketingSpeedAPI.Controllers
             try
             {
                 var subscriptions = await _context.UserSubscriptions
-                    .Where(s => s.UserId == userId && s.IsActive && s.PaymentStatus == "paid" && s.EndDate.Date >= DateTime.UtcNow.Date)
+                    .Where(s => s.UserId == userId && s.IsActive && s.PaymentStatus == "paid" && s.EndDate.Date >= DateTime.Now.Date)
                     .Include(s => s.Package)
                         .ThenInclude(p => p.Features)
                     .OrderByDescending(s => s.CreatedAt)
@@ -172,7 +172,7 @@ namespace MarketingSpeedAPI.Controllers
                                 EndDate = s.EndDate.ToString("yyyy-MM-dd"),
                                 s.PaymentStatus,
                                 s.IsActive,
-                                DaysLeft = (s.EndDate.Date - DateTime.UtcNow.Date).Days
+                                DaysLeft = (s.EndDate.Date - DateTime.Now.Date).Days
                             },
                             package = new
                             {
@@ -246,7 +246,7 @@ namespace MarketingSpeedAPI.Controllers
                                 EndDate = group.Max(s => s.EndDate).ToString("yyyy-MM-dd"),
                                 PaymentStatus = "Merged",
                                 IsActive = true,
-                                DaysLeft = (group.Max(s => s.EndDate).Date - DateTime.UtcNow.Date).Days,
+                                DaysLeft = (group.Max(s => s.EndDate).Date - DateTime.Now.Date).Days,
                                 MergedSubscriptionIds = group.Select(s => s.Id).ToList(),
                                 MergedPackages = group.Select(s => new
                                 {
@@ -329,12 +329,12 @@ namespace MarketingSpeedAPI.Controllers
                 PackageId = pkg.Id,
                 PlanName = pkg.Name,
                 Price = pkg.Price,
-                StartDate = DateTime.UtcNow,
-                EndDate = DateTime.UtcNow.AddDays(pkg.DurationDays),
+                StartDate = DateTime.Now,
+                EndDate = DateTime.Now.AddDays(pkg.DurationDays),
                 PaymentStatus = "paid",
                 IsActive = true,
-                CreatedAt = DateTime.UtcNow,
-                UpdatedAt = DateTime.UtcNow
+                CreatedAt = DateTime.Now,
+                UpdatedAt = DateTime.Now
             };
 
             _context.UserSubscriptions.Add(subscription);
@@ -368,7 +368,7 @@ namespace MarketingSpeedAPI.Controllers
 
             // قم بإلغاء تفعيل الاشتراك
             subscription.IsActive = false;
-            subscription.UpdatedAt = DateTime.UtcNow;
+            subscription.UpdatedAt = DateTime.Now;
             subscription.PaymentStatus = "cancelled";
 
             // قلل عدد المشتركين في الباقة
@@ -410,15 +410,15 @@ namespace MarketingSpeedAPI.Controllers
             {
                 existingUsage.UsedCount += usage.UsedCount;
                 existingUsage.RemainingCount = Math.Max(existingUsage.LimitCount - existingUsage.UsedCount, 0);
-                existingUsage.LastUsedAt = DateTime.UtcNow;
-                existingUsage.UpdatedAt = DateTime.UtcNow;
+                existingUsage.LastUsedAt = DateTime.Now;
+                existingUsage.UpdatedAt = DateTime.Now;
                 _context.subscription_usage.Update(existingUsage);
             }
             else
             {
-                usage.CreatedAt = DateTime.UtcNow;
-                usage.UpdatedAt = DateTime.UtcNow;
-                usage.LastUsedAt = DateTime.UtcNow;
+                usage.CreatedAt = DateTime.Now;
+                usage.UpdatedAt = DateTime.Now;
+                usage.LastUsedAt = DateTime.Now;
                 _context.subscription_usage.Add(usage);
             }
 
@@ -490,7 +490,7 @@ namespace MarketingSpeedAPI.Controllers
                 subscription.Price,
                 StartDate = subscription.StartDate.ToString("yyyy-MM-dd"),
                 EndDate = subscription.EndDate.ToString("yyyy-MM-dd"),
-                DaysLeft = (subscription.EndDate.Date - DateTime.UtcNow.Date).Days,
+                DaysLeft = (subscription.EndDate.Date - DateTime.Now.Date).Days,
 
                 Summary = new
                 {
@@ -610,7 +610,7 @@ namespace MarketingSpeedAPI.Controllers
         [HttpGet("inactive-over-30-days")]
         public async Task<ActionResult<IEnumerable<object>>> GetInactivePackages()
         {
-            var dateThreshold = DateTime.UtcNow.AddDays(-30);
+            var dateThreshold = DateTime.Now.AddDays(-30);
 
             var inactive = await _context.Packages
                 .Where(p => p.SubscriberCount == 0 && p.UpdatedAt < dateThreshold && !p.Archived)
@@ -660,7 +660,7 @@ namespace MarketingSpeedAPI.Controllers
         public async Task<ActionResult<IEnumerable<object>>> GetScheduledPackages()
         {
             var scheduled = await _context.Packages
-                .Where(p => p.ScheduledAt != null && p.ScheduledAt > DateTime.UtcNow)
+                .Where(p => p.ScheduledAt != null && p.ScheduledAt > DateTime.Now)
                 .Select(p => new
                 {
                     p.Id,

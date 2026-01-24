@@ -56,7 +56,7 @@ namespace MarketingSpeedAPI.Controllers
                 DeviceId = req.DeviceId,
                 PromoCodeUsed = req.PromoCode,
                 MarketerId = marketerId,
-                CreatedAt = DateTime.UtcNow,
+                CreatedAt = DateTime.Now,
                 IsVerified = true
             };
 

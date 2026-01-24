@@ -25,7 +25,7 @@ namespace MarketingSpeedAPI.Hubs
         // optional: client can send message via hub to session
         public Task SendMessageToSession(string sessionId, string text)
         {
-            return Clients.Group(sessionId).SendAsync("ReceiveMessage", "server", text, DateTime.UtcNow.ToString("o"));
+            return Clients.Group(sessionId).SendAsync("ReceiveMessage", "server", text, DateTime.Now.ToString("o"));
         }
     }
 }

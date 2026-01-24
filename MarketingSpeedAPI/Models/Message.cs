@@ -19,7 +19,7 @@
         public bool IsScheduled { get; set; } = false;
         public DateTime? ScheduledTime { get; set; }
         public string Status { get; set; } = "pending"; // pending | sent | failed
-        public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+        public DateTime CreatedAt { get; set; } = DateTime.Now;
         public DateTime? SentAt { get; set; }
 
         public List<MessageLog> Logs { get; set; } = new();
@@ -39,7 +39,7 @@
         public int UserId { get; set; } // 🔹 لتحديد صاحب الرسالة
 
         public bool? toGroupMember { get; set; } = false;
-        public DateTime AttemptedAt { get; set; } = DateTime.UtcNow;
+        public DateTime AttemptedAt { get; set; } = DateTime.Now;
 
 
         // ✅ إضافات مهمة
@@ -60,7 +60,7 @@
         public int Id { get; set; }
         public string GroupId { get; set; } = "";
         public int UserId { get; set; }
-        public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+        public DateTime CreatedAt { get; set; } = DateTime.Now;
     }
 
     public class SendMessageRequests

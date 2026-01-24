@@ -8,7 +8,7 @@
         public int PackageId { get; set; }
         public decimal Amount { get; set; }
         public string Status { get; set; } // paid / failed
-        public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+        public DateTime CreatedAt { get; set; } = DateTime.Now;
     }
     public class VerifyPaymentRequest
     {

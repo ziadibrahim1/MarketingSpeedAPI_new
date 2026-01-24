@@ -26,9 +26,9 @@ namespace MarketingSpeedAPI.Controllers
                 suggestionAr = dto.SuggestionAr,
                 suggestionEn = dto.SuggestionEn,
                 isStarred = dto.IsStarred,
-                createdAt = DateTime.UtcNow,
+                createdAt = DateTime.Now,
                 UserId = dto.UserId,
-                updatedAt = DateTime.UtcNow
+                updatedAt = DateTime.Now
             };
 
             _context.Suggestions.Add(suggestion);

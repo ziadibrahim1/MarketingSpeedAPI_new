@@ -72,7 +72,7 @@ namespace MarketingSpeedAPI.Controllers
         public async Task<IActionResult> Login([FromBody] LoginDto dto)
         {
             var lang = (dto.language ?? "en").ToLower();
-            var user = await _context.Users.FirstOrDefaultAsync(u => u.email == dto.email && u.is_email_verified);
+            var user = await _context.Users.FirstOrDefaultAsync(u => u.email == dto.email && u.is_email_verified  );
 
             if (user == null)
             {
@@ -83,6 +83,11 @@ namespace MarketingSpeedAPI.Controllers
             var hashedPassword = ComputeSha256Hash(dto.password_hash);
             Console.WriteLine($"Hashed: {hashedPassword}");
 
+            if (user.status != "active")
+            {
+                var msg = lang == "ar" ? "الحساب محظور" : "Email is band";
+                return Unauthorized(new { message = msg });
+            }
             if (user.password_hash != hashedPassword)
             {
                 var msg = lang == "ar" ? "كلمة المرور غير صحيحة" : "Incorrect password";
@@ -96,7 +101,7 @@ namespace MarketingSpeedAPI.Controllers
             }
 
             // تحديث آخر ظهور
-            user.last_seen = DateTime.UtcNow;
+            user.last_seen = DateTime.Now;
             await _context.SaveChangesAsync();
 
             var successMsg = lang == "ar" ? "تم تسجيل الدخول بنجاح" : "Login successful";
@@ -122,6 +127,20 @@ namespace MarketingSpeedAPI.Controllers
 
             });
 
+        }
+        
+        [HttpGet("platforms/status")]
+        public IActionResult GetPlatformStatuses()
+        {
+            var data = _context.Platforms
+                .Select(p => new PlatformStatusDto
+                {
+                    PlatformName = p.Name,
+                    Status = p.Status,
+                })
+                .ToList();
+
+            return Ok(data);
         }
 
         [HttpPost("register")]
@@ -158,8 +177,8 @@ namespace MarketingSpeedAPI.Controllers
                     accept_terms = dto.accept_terms,
                     password_hash = ComputeSha256Hash(dto.password_hash),
                     verification_code = code,
-                    verification_code_expires_at = DateTime.UtcNow.AddMinutes(2),
-                    created_at = DateTime.UtcNow,
+                    verification_code_expires_at = DateTime.Now.AddMinutes(2),
+                    created_at = DateTime.Now,
                     is_email_verified = false
                 };
 
@@ -253,7 +272,7 @@ namespace MarketingSpeedAPI.Controllers
                 user.city = city.Id;
             }
 
-            user.updated_at = DateTime.UtcNow;
+            user.updated_at = DateTime.Now;
 
             await _context.SaveChangesAsync();
 
@@ -297,7 +316,7 @@ namespace MarketingSpeedAPI.Controllers
 
                 string code = new Random().Next(100000, 999999).ToString();
                 user.verification_code = code;
-                user.verification_code_expires_at = DateTime.UtcNow.AddMinutes(2);
+                user.verification_code_expires_at = DateTime.Now.AddMinutes(2);
                 user.is_email_verified = false;
 
                 await _emailService.SendVerificationEmailAsync(user.email, code);
@@ -342,7 +361,7 @@ namespace MarketingSpeedAPI.Controllers
                     user.city = int.Parse(dto.CityName);
                
             }
-                user.updated_at = DateTime.UtcNow;
+                user.updated_at = DateTime.Now;
             await _context.SaveChangesAsync();
             
             return Ok(new
@@ -377,7 +396,7 @@ namespace MarketingSpeedAPI.Controllers
             if (user.verification_code != dto.verification_code)
                 return BadRequest(new { error = "رمز التحقق غير صحيح" });
 
-            if (user.verification_code_expires_at < DateTime.UtcNow)
+            if (user.verification_code_expires_at < DateTime.Now)
                 return BadRequest(new { error = "انتهت صلاحية رمز التحقق" });
 
             // تم التحقق بنجاح
@@ -435,7 +454,7 @@ namespace MarketingSpeedAPI.Controllers
 
             string code = _random.Next(100000, 999999).ToString();
             user.verification_code = code;
-            user.verification_code_expires_at = DateTime.UtcNow.AddMinutes(2);
+            user.verification_code_expires_at = DateTime.Now.AddMinutes(2);
 
             await _emailService.SendVerificationEmailAsync(user.email, code);
             await _context.SaveChangesAsync();
@@ -526,7 +545,7 @@ namespace MarketingSpeedAPI.Controllers
             // توليد كود عشوائي 6 أرقام
             var code = new Random().Next(100000, 999999).ToString();
             user.verification_code = code;
-            user.verification_code_expires_at = DateTime.UtcNow.AddMinutes(5);
+            user.verification_code_expires_at = DateTime.Now.AddMinutes(5);
             await _emailService.SendVerificationEmailAsync(user.email, code);
 
             await _context.SaveChangesAsync();
@@ -551,13 +570,13 @@ namespace MarketingSpeedAPI.Controllers
             if (user.verification_code != dto.Code)
                 return BadRequest(new { message = "Invalid verification code" });
 
-            if (user.verification_code_expires_at < DateTime.UtcNow)
+            if (user.verification_code_expires_at < DateTime.Now)
                 return BadRequest(new { message = "Verification code expired" });
 
             // ✅ لو الكود صحيح
             user.is_email_verified = true;
             user.verification_code = null; // نمسح الكود بعد التحقق
-            user.updated_at = DateTime.UtcNow;
+            user.updated_at = DateTime.Now;
 
             await _context.SaveChangesAsync();
 
@@ -574,7 +593,7 @@ namespace MarketingSpeedAPI.Controllers
             
             string code = _random.Next(100000, 999999).ToString();
             user.verification_code = code;
-            user.verification_code_expires_at = DateTime.UtcNow.AddMinutes(2);
+            user.verification_code_expires_at = DateTime.Now.AddMinutes(2);
 
             await _emailService.SendVerificationEmailAsync(user.email, code);
             await _context.SaveChangesAsync();
@@ -599,7 +618,7 @@ namespace MarketingSpeedAPI.Controllers
 
             // 🔑 تشفير كلمة المرور الجديدة
             user.password_hash = ComputeSha256Hash(dto.New_Password);
-            user.updated_at = DateTime.UtcNow;
+            user.updated_at = DateTime.Now;
 
             await _context.SaveChangesAsync();
 
@@ -611,6 +630,7 @@ namespace MarketingSpeedAPI.Controllers
         {
             var user = await (
                 from u in _context.Users
+                .Where(u =>  u.status == "active")
                 join c in _context.Cities
                     on u.city equals c.Id into cityGroup
                 from c in cityGroup.DefaultIfEmpty()   // 👈 Left Join
@@ -690,7 +710,7 @@ namespace MarketingSpeedAPI.Controllers
             if (!string.IsNullOrEmpty(dto.Theme)) user.theme = dto.Theme;
             if (dto.Accept_Notifications.HasValue) user.accept_notifications = dto.Accept_Notifications.Value;
             if (!string.IsNullOrEmpty(dto.Language)) user.language = dto.Language;
-            user.updated_at = DateTime.UtcNow;
+            user.updated_at = DateTime.Now;
             await _context.SaveChangesAsync();
             return Ok(new { message = "", user });
         }
@@ -786,7 +806,7 @@ namespace MarketingSpeedAPI.Controllers
                 Sender = dto.Sender,
                 MessageText = dto.MessageText,
                 AttachmentUrl = dto.AttachmentUrl,
-                SentAt = DateTime.UtcNow
+                SentAt = DateTime.Now
             };
 
             _context.conversation_messages.Add(message);
@@ -809,7 +829,7 @@ namespace MarketingSpeedAPI.Controllers
                 AgentId = null, // 👈 لسه محدش استلم
                 Status = "active",
                 DurationMinutes = 30,
-                StartedAt = DateTime.UtcNow
+                StartedAt = DateTime.Now
             };
 
             _context.Conversations.Add(conversation);
@@ -850,7 +870,7 @@ namespace MarketingSpeedAPI.Controllers
                 CountryId = model.CountryId,
                 CategoryId = model.CategoryId,
                 Status = "pending",
-                CreatedAt = DateTime.UtcNow
+                CreatedAt = DateTime.Now
             };
             _context.group_requests.Add(entity);
             await _context.SaveChangesAsync();

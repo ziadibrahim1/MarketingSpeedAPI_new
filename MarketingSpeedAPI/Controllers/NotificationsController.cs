@@ -21,8 +21,8 @@ public class NotificationsController : ControllerBase
             us.UserId == userId &&
             us.IsActive == true &&
             us.PaymentStatus == "paid" &&
-            us.StartDate <= DateTime.UtcNow &&
-            us.EndDate >= DateTime.UtcNow
+            us.StartDate <= DateTime.Now &&
+            us.EndDate >= DateTime.Now
         );
 
         var hasConnectedAccount = await _context.user_accounts.AnyAsync(ua =>
@@ -35,15 +35,15 @@ public class NotificationsController : ControllerBase
             us.UserId == userId &&
             us.IsActive &&
             us.PaymentStatus == "paid" &&
-            us.StartDate <= DateTime.UtcNow &&
-            us.EndDate >= DateTime.UtcNow
+            us.StartDate <= DateTime.Now &&
+            us.EndDate >= DateTime.Now
         )
         .Select(us => us.PackageId)
         .ToListAsync();
 
         var notifications = await _context.Notifications
             .Where(n =>
-                n.Destination == "in_app" && (n.ScheduleAt == null || n.ScheduleAt <= DateTime.UtcNow) &&
+                n.Destination == "in_app" && (n.ScheduleAt == null || n.ScheduleAt <= DateTime.Now) &&
                 (
                     n.TargetAudience == "all" ||
 
@@ -80,7 +80,7 @@ public class NotificationsController : ControllerBase
             TargetAudience = dto.TargetAudience,
             Destination = dto.Destination,
             ScheduleAt = dto.ScheduleAt,
-            CreatedAt = DateTime.UtcNow
+            CreatedAt = DateTime.Now
         };
 
         _context.Notifications.Add(notification);

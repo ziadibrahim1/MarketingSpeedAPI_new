@@ -77,12 +77,12 @@ namespace MarketingSpeedAPI.Controllers
 
         private async Task<TdApi.AuthorizationState> WaitForAnyStateAsync(long userId, int timeoutMs = 5000)
         {
-            var start = DateTime.UtcNow;
+            var start = DateTime.Now;
             TdApi.AuthorizationState state = null;
 
             while (!_authStates.TryGetValue(userId, out state))
             {
-                if ((DateTime.UtcNow - start).TotalMilliseconds > timeoutMs)
+                if ((DateTime.Now - start).TotalMilliseconds > timeoutMs)
                 {
                     // لو لم يصل أي تحديث خلال الوقت المحدد، اعتبر الجلسة مغلقة
                     return new TdApi.AuthorizationState.AuthorizationStateClosed();

@@ -11,7 +11,7 @@
         public int? CategoryId { get; set; }
         public string Status { get; set; } = "pending";
         public string? AdminNote { get; set; }
-        public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+        public DateTime CreatedAt { get; set; } = DateTime.Now;
         public DateTime? ReviewedAt { get; set; }
     }
 }

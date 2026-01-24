@@ -5,5 +5,5 @@
     public int UserId { get; set; }
     public int CouponId { get; set; }
 
-    public DateTime UsedAt { get; set; } = DateTime.UtcNow;
+    public DateTime UsedAt { get; set; } = DateTime.Now;
 }

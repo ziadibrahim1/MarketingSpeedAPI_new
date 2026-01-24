@@ -38,7 +38,7 @@ namespace MarketingSpeedAPI.Controllers
                     AccountIdentifier = req.PhoneNumber,
                     DisplayName = req.DisplayName,
                     Status = "disconnected",
-                    LastActivity = DateTime.UtcNow
+                    LastActivity = DateTime.Now
                 };
                 _db.user_accounts.Add(acc);
             }
@@ -47,7 +47,7 @@ namespace MarketingSpeedAPI.Controllers
                 acc.AccountIdentifier = req.PhoneNumber;
                 acc.DisplayName = req.DisplayName;
                 acc.Status = "disconnected";
-                acc.LastActivity = DateTime.UtcNow;
+                acc.LastActivity = DateTime.Now;
             }
             await Task.Yield();
             await _db.SaveChangesAsync();
@@ -67,7 +67,7 @@ namespace MarketingSpeedAPI.Controllers
             if (result == "need_2fa_password" && acc != null)
             {
                 acc.Status = "disconnected";
-                acc.LastActivity = DateTime.UtcNow;
+                acc.LastActivity = DateTime.Now;
                 await _db.SaveChangesAsync();
                 return Ok(new { success = true, status = "disconnected" });
             }
@@ -75,8 +75,8 @@ namespace MarketingSpeedAPI.Controllers
             if (result == "connected" && acc != null)
             {
                 acc.Status = "connected";
-                acc.ConnectedAt = DateTime.UtcNow;
-                acc.LastActivity = DateTime.UtcNow;
+                acc.ConnectedAt = DateTime.Now;
+                acc.LastActivity = DateTime.Now;
                 await _db.SaveChangesAsync();
             }
 
@@ -96,8 +96,8 @@ namespace MarketingSpeedAPI.Controllers
             if (acc != null)
             {
                 acc.Status = "connected";
-                acc.ConnectedAt = DateTime.UtcNow;
-                acc.LastActivity = DateTime.UtcNow;
+                acc.ConnectedAt = DateTime.Now;
+                acc.LastActivity = DateTime.Now;
                 await _db.SaveChangesAsync();
             }
 
@@ -139,7 +139,7 @@ namespace MarketingSpeedAPI.Controllers
             await foreach (var acc in accs.AsAsyncEnumerable())
             {
                 acc.Status = "disconnected";
-                acc.LastActivity = DateTime.UtcNow;
+                acc.LastActivity = DateTime.Now;
             }
             await _db.SaveChangesAsync();
 

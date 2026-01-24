@@ -51,10 +51,10 @@ namespace MarketingSpeedAPI.Models
 
 
         [Column("created_at")]
-        public DateTime created_at { get; set; } = DateTime.UtcNow;
+        public DateTime created_at { get; set; } = DateTime.Now;
 
         [Column("updated_at")]
-        public DateTime updated_at { get; set; } = DateTime.UtcNow;
+        public DateTime updated_at { get; set; } = DateTime.Now;
     }
 
 }

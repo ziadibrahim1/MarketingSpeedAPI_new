@@ -32,12 +32,12 @@
     public required string password_hash { get; set; }
     public bool is_email_verified { get; set; } = false;
     public string? verification_code { get; set; }
-    public required DateTime verification_code_expires_at { get; set; } = DateTime.UtcNow.AddMinutes(2);
+    public required DateTime verification_code_expires_at { get; set; } = DateTime.Now.AddMinutes(2);
 
     // تتبع النشاط
     public DateTime? last_seen { get; set; }
-    public DateTime created_at { get; set; } = DateTime.UtcNow;
-    public DateTime updated_at { get; set; } = DateTime.UtcNow;
+    public DateTime created_at { get; set; } = DateTime.Now;
+    public DateTime updated_at { get; set; } = DateTime.Now;
 }
 
 

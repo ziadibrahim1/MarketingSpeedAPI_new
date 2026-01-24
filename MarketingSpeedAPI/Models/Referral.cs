@@ -23,7 +23,7 @@ namespace MarketingSpeedAPI.Models
         [MaxLength(20)]
         public string Status { get; set; } = "pending"; // pending | completed
 
-        public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+        public DateTime CreatedAt { get; set; } = DateTime.Now;
 
         // علاقات
         [ForeignKey("ReferrerId")]

@@ -123,7 +123,7 @@ namespace MarketingSpeedAPI.Controllers
         [HttpPost("AddChatMessage")]
         public async Task<IActionResult> AddChatMessage([FromBody] ChatMessage message)
         {
-            message.Timestamp = DateTime.UtcNow;
+            message.Timestamp = DateTime.Now;
             _context.ChatMessages.Add(message);
             await _context.SaveChangesAsync();
             return Ok(message);

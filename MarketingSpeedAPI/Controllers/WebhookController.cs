@@ -71,7 +71,7 @@ public class WebhookController : ControllerBase
             UserPhone = cleanNumber,
             Text = text,
             IsSentByMe = false,
-            Timestamp = DateTime.UtcNow,
+            Timestamp = DateTime.Now,
             IsRaeded = false,
             channelId = account.channelId,
             reciverNumber = account.AccountIdentifier,

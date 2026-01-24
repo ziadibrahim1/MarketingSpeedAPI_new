@@ -45,8 +45,8 @@ namespace MarketingSpeedAPI.Controllers
                 s.UserId == req.UserId &&
                 s.IsActive == true &&
                 s.PaymentStatus == "paid" &&
-                s.StartDate <= DateTime.UtcNow &&
-                s.EndDate >= DateTime.UtcNow
+                s.StartDate <= DateTime.Now &&
+                s.EndDate >= DateTime.Now
             );
 
             if (!hasActiveSubscription)
@@ -79,7 +79,7 @@ namespace MarketingSpeedAPI.Controllers
                     long activeTill = info["activeTill"]?.ToObject<long>() ?? 0;
 
                     var exp = DateTimeOffset.FromUnixTimeMilliseconds(activeTill).UtcDateTime;
-                    var now = DateTime.UtcNow;
+                    var now = DateTime.Now;
 
                     if (exp > now)
                     {
@@ -174,9 +174,9 @@ namespace MarketingSpeedAPI.Controllers
                     Status = "disconnected",
                     ConnectedAt = creationTs.HasValue
                         ? DateTimeOffset.FromUnixTimeMilliseconds(creationTs.Value).UtcDateTime
-                        : DateTime.UtcNow,
-                    LastActivity = DateTime.UtcNow,
-                    QrCodeExpiry = DateTime.UtcNow.AddMinutes(5)
+                        : DateTime.Now,
+                    LastActivity = DateTime.Now,
+                    QrCodeExpiry = DateTime.Now.AddMinutes(5)
                 };
 
                 _context.user_accounts.Add(existingAccount);
@@ -188,8 +188,8 @@ namespace MarketingSpeedAPI.Controllers
                 existingAccount.AccountIdentifier = req.PhoneNumber;
                 existingAccount.DisplayName = req.Name;
                 existingAccount.Status = "disconnected";
-                existingAccount.LastActivity = DateTime.UtcNow;
-                existingAccount.QrCodeExpiry = DateTime.UtcNow.AddMinutes(5);
+                existingAccount.LastActivity = DateTime.Now;
+                existingAccount.QrCodeExpiry = DateTime.Now.AddMinutes(5);
             }
 
             await _context.SaveChangesAsync();
@@ -278,7 +278,7 @@ namespace MarketingSpeedAPI.Controllers
 
             // النجاح هنا يعني أن الحساب تم ربطه بنجاح
             account.Status = "connected";
-            account.LastActivity = DateTime.UtcNow;
+            account.LastActivity = DateTime.Now;
             await _context.SaveChangesAsync();
 
             return Ok(new { success = true, message = "Login completed" });
@@ -343,7 +343,7 @@ namespace MarketingSpeedAPI.Controllers
         [HttpGet("check-status/{userId:int}/{platformId:int}")]
         public async Task<IActionResult> CheckStatus(int userId, int platformId)
         {
-            var today = DateTime.UtcNow.Date;
+            var today = DateTime.Now.Date;
 
             var subscription = await _context.UserSubscriptions
                 .Where(s => s.UserId == userId &&
@@ -403,11 +403,11 @@ namespace MarketingSpeedAPI.Controllers
             
             // تحديث قاعدة البيانات بنفس المتغيرات القديمة
             account.Status = mappedStatus;
-            account.LastActivity = DateTime.UtcNow;
+            account.LastActivity = DateTime.Now;
 
             if (mappedStatus == "connected")
             {
-                account.ConnectedAt = DateTime.UtcNow;
+                account.ConnectedAt = DateTime.Now;
 
                 // ====== PATCH لإرسال إعدادات البروكسي بعد التأكد من الاتصال ======
                 try
@@ -474,7 +474,7 @@ namespace MarketingSpeedAPI.Controllers
 
             // تحديث بيانات DB بنفس الشكل القديم
             account.Status = "disconnected";
-            account.LastActivity = DateTime.UtcNow;
+            account.LastActivity = DateTime.Now;
 
             await _context.SaveChangesAsync();
 

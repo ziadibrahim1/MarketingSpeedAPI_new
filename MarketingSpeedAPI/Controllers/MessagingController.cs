@@ -1921,8 +1921,8 @@ namespace MarketingSpeedAPI.Controllers
                     Phone = phone,
                     UserId = userId,
                     Id = dbEntry?.Id ?? 0, // أو 0 لو مفيش
-                    CreatedAt = dbEntry?.CreatedAt ?? DateTime.UtcNow,
-                    UpdatedAt = dbEntry?.UpdatedAt ?? DateTime.UtcNow
+                    CreatedAt = dbEntry?.CreatedAt ?? DateTime.Now,
+                    UpdatedAt = dbEntry?.UpdatedAt ?? DateTime.Now
                 };
             }).ToList();
 

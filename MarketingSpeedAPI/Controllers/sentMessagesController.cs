@@ -110,7 +110,7 @@ namespace MarketingSpeedAPI.Controllers
             if (msg == null)
                 return NotFound(new { success = false, message = "Message not found" });
 
-            var today = DateTime.UtcNow.Date;
+            var today = DateTime.Now.Date;
 
             var subscription = await _context.UserSubscriptions
                 .Where(s => s.UserId == msg.UserId &&
@@ -199,7 +199,7 @@ namespace MarketingSpeedAPI.Controllers
                     PlatformId = account.PlatformId,
                     Status = response.IsSuccessful ? "sent" : "failed",
                     ErrorMessage = response.IsSuccessful ? null : response.Content,
-                    AttemptedAt = DateTime.UtcNow,
+                    AttemptedAt = DateTime.Now,
                     ExternalMessageId = externalId
                 };
                 _context.message_logs.Add(log);
@@ -207,7 +207,7 @@ namespace MarketingSpeedAPI.Controllers
                 if (response.IsSuccessful)
                 {
                     msg.Status = "sent";
-                    msg.SentAt = DateTime.UtcNow;
+                    msg.SentAt = DateTime.Now;
                     results.Add(new { groupId, fileUrl, success = true, externalId });
                 }
                 else
@@ -286,7 +286,7 @@ namespace MarketingSpeedAPI.Controllers
         {
            
             var tz = TimeZoneInfo.FindSystemTimeZoneById("Arab Standard Time");
-            var nowLocal = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, tz);
+            var nowLocal = TimeZoneInfo.ConvertTimeFromUtc(DateTime.Now, tz);
             var startOfDay = new DateTime(nowLocal.Year, nowLocal.Month, nowLocal.Day, 0, 0, 0);
             var endOfDay = startOfDay.AddDays(1);
 
@@ -320,7 +320,7 @@ namespace MarketingSpeedAPI.Controllers
         [HttpGet("user/{userId}/messages-stats")]
         public async Task<IActionResult> GetUserMessagesStats(long userId, string range = "day")
         {
-            var now = DateTime.UtcNow.Date;
+            var now = DateTime.Now.Date;
 
             var logs = await _context.message_logs
             .Where(l => l.UserId == userId
@@ -332,7 +332,7 @@ namespace MarketingSpeedAPI.Controllers
             if (range == "day")
             {
                 // 🔹 نحدد بداية الأسبوع (السبت) ونهايته (الجمعة)
-                var today = DateTime.UtcNow.Date;
+                var today = DateTime.Now.Date;
                 int daysSinceSaturday = ((int)today.DayOfWeek + 1) % 7; // السبت = 0
                 var startOfWeek = today.AddDays(-daysSinceSaturday);
                 var endOfWeek = startOfWeek.AddDays(6);
@@ -364,7 +364,7 @@ namespace MarketingSpeedAPI.Controllers
                 var weekRule = System.Globalization.CalendarWeekRule.FirstFourDayWeek;
                 var dayOfWeek = DayOfWeek.Saturday;
 
-                var now1 = DateTime.UtcNow.Date;
+                var now1 = DateTime.Now.Date;
                 var startOfMonth = new DateTime(now1.Year, now1.Month, 1);
 
                 var grouped = logs

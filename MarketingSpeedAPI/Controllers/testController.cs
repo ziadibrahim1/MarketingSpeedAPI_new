@@ -14,7 +14,7 @@ namespace MarketingSpeedAPI.Controllers
         [HttpPost("broadcast")]
         public async Task<IActionResult> Broadcast([FromBody] TestMessageDto dto)
         {
-            await _hub.Clients.Group(dto.SessionId).SendAsync("ReceiveMessage", dto.UserPhone, dto.Text, DateTime.UtcNow.ToString("o"));
+            await _hub.Clients.Group(dto.SessionId).SendAsync("ReceiveMessage", dto.UserPhone, dto.Text, DateTime.Now.ToString("o"));
             return Ok(new { sent = true });
         }
     }

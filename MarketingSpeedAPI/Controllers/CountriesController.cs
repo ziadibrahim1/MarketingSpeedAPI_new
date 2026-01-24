@@ -62,7 +62,7 @@ namespace MarketingSpeedAPI.Controllers
         [HttpGet("{CategoryID}/{CountryID}/{userId}")]
         public async Task<IActionResult> GetGroups(ulong userId, int CategoryID, int CountryID)
         {
-            var now = DateTime.UtcNow;
+            var now = DateTime.Now;
             var today = now.Date;
             var oneHourAgo = now.AddHours(-1);
 
@@ -259,7 +259,7 @@ namespace MarketingSpeedAPI.Controllers
         [HttpPost("accept-invite/{userId}")]
         public async Task<IActionResult> AcceptInvite(ulong userId, [FromBody] InviteRequest req)
         {
-            var now = DateTime.UtcNow;
+            var now = DateTime.Now;
             var today = now.Date;
             var oneHourAgo = now.AddHours(-1);
 
@@ -484,7 +484,7 @@ namespace MarketingSpeedAPI.Controllers
                     GroupId = req.Jid,
                     GroupName = req.GroupName ?? "",
                     InviteLink = inviteCode,  // ❗ inviteCode الوهمي
-                    LeftAt = DateTime.UtcNow
+                    LeftAt = DateTime.Now
                 };
                 _context.LeftGroups.Add(leftGroup);
                 await _context.SaveChangesAsync();

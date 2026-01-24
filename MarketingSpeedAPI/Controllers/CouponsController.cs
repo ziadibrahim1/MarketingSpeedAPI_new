@@ -72,7 +72,7 @@ namespace MarketingSpeedAPI.Controllers
             if (!coupon.IsActive)
                 return Ok(new { valid = false, reason = "Inactive" });
 
-            if (coupon.ExpiryDate < DateTime.UtcNow.Date)
+            if (coupon.ExpiryDate < DateTime.Now.Date)
                 return Ok(new { valid = false, reason = "Expired" });
 
             return Ok(new

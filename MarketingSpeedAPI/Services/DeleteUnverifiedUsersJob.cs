@@ -18,7 +18,7 @@ public class DeleteUnverifiedUsersJob : BackgroundService
             using var scope = _serviceProvider.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
-            var cutoff = DateTime.UtcNow.AddHours(-24); // عمر الصلاحية
+            var cutoff = DateTime.Now.AddHours(-24); // عمر الصلاحية
             var toDelete = db.Users
                 .Where(u => !u.is_email_verified && u.created_at < cutoff);
 

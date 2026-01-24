@@ -15,8 +15,8 @@ namespace MarketingSpeedAPI.Models
 
         public bool is_official { get; set; } = true;
 
-        public DateTime created_at { get; set; } = DateTime.UtcNow;
-        public DateTime updated_at { get; set; } = DateTime.UtcNow;
+        public DateTime created_at { get; set; } = DateTime.Now;
+        public DateTime updated_at { get; set; } = DateTime.Now;
     }
 
     public class DirectContact
@@ -30,7 +30,7 @@ namespace MarketingSpeedAPI.Models
         [Required]
         public string value { get; set; }
 
-        public DateTime created_at { get; set; } = DateTime.UtcNow;
-        public DateTime updated_at { get; set; } = DateTime.UtcNow;
+        public DateTime created_at { get; set; } = DateTime.Now;
+        public DateTime updated_at { get; set; } = DateTime.Now;
     }
 }

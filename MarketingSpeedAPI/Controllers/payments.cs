@@ -44,7 +44,7 @@ namespace MarketingSpeedAPI.Controllers
                     .FirstOrDefaultAsync(c =>
                         c.Code == req.Coupon &&
                         c.IsActive &&
-                        c.ExpiryDate >= DateTime.UtcNow.Date);
+                        c.ExpiryDate >= DateTime.Now.Date);
 
                 if (coupon != null)
                 {
@@ -150,11 +150,11 @@ namespace MarketingSpeedAPI.Controllers
                     PackageId = req.PackageId,
                     PlanName = package.Name,
                     Price = package.Price,
-                    StartDate = DateTime.UtcNow,
-                    EndDate = DateTime.UtcNow.AddDays(package.DurationDays + extraDays),
+                    StartDate = DateTime.Now,
+                    EndDate = DateTime.Now.AddDays(package.DurationDays + extraDays),
                     PaymentStatus = "paid",
                     IsActive = true,
-                    CreatedAt = DateTime.UtcNow,
+                    CreatedAt = DateTime.Now,
                 };
 
                 _context.UserSubscriptions.Add(subscription);

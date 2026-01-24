@@ -44,6 +44,6 @@ namespace MarketingSpeedAPI.Models
         public string? Platform { get; set; } = "android";
 
         [Column("createdAt")]
-        public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+        public DateTime CreatedAt { get; set; } = DateTime.Now;
     }
 }
