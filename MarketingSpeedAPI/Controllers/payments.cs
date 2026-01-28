@@ -36,45 +36,36 @@ namespace MarketingSpeedAPI.Controllers
 
             decimal originalPrice = package.Price;
             decimal finalPrice = originalPrice;
-            int? couponId = null;
 
+            int? marketerId = null;
+            int? addDays = 0;
             if (!string.IsNullOrWhiteSpace(req.Coupon))
             {
-                var coupon = await _context.Coupons
-                    .FirstOrDefaultAsync(c =>
-                        c.Code == req.Coupon &&
-                        c.IsActive &&
-                        c.ExpiryDate >= DateTime.Now.Date);
+                var promoCode = req.Coupon.Trim();
 
-                if (coupon != null)
+                var marketer = await _context.Marketers.FirstOrDefaultAsync(m =>
+                    m.PromoCode == promoCode &&
+                    !m.IsFrozen &&
+                    !m.IsDeleted
+                );
+
+                if (marketer != null)
                 {
-                    couponId = coupon.Id;
-
-                    if (coupon.DiscountType == "percent")
-                    {
-                        decimal discount = originalPrice * (coupon.DiscountValue / 100);
-
-                        if (coupon.MaxDiscount != null && discount > coupon.MaxDiscount)
-                            discount = coupon.MaxDiscount.Value;
-
-                        finalPrice = originalPrice - discount;
-                    }
-                    else if (coupon.DiscountType == "amount")
-                    {
-                        finalPrice = originalPrice - coupon.DiscountValue;
-                    }
-
-                    if (finalPrice < 1)
-                        finalPrice = 1;
+                    marketerId = marketer.Id;
+                    addDays = 3;
                 }
             }
+
+            if (finalPrice < 1)
+                finalPrice = 1;
 
             return Ok(new
             {
                 packageId = req.PackageId,
                 originalPrice,
                 finalPrice,
-                couponId
+                addDays,
+                marketerId
             });
         }
 

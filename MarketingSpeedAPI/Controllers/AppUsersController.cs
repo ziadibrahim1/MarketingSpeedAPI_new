@@ -23,7 +23,7 @@ namespace MarketingSpeedAPI.Controllers
                 return BadRequest(new { message = "Email and DeviceId are required" });
 
             // 1️⃣ منع التكرار
-            var exists = await _context.AppUsers
+            var exists = await _context.app_users
                 .AnyAsync(x => x.Email == req.Email || x.DeviceId == req.DeviceId);
 
             if (exists)
@@ -60,7 +60,7 @@ namespace MarketingSpeedAPI.Controllers
                 IsVerified = true
             };
 
-            _context.AppUsers.Add(user);
+            _context.app_users.Add(user);
             await _context.SaveChangesAsync();
 
             return Ok(new
