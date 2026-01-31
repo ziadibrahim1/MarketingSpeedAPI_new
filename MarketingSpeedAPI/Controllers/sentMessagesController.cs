@@ -25,11 +25,11 @@ namespace MarketingSpeedAPI.Controllers
         }
 
 
-        [HttpGet]
-        public async Task<IActionResult> GetMessagesByBody()
+        [HttpGet("sent/{userid}")]
+        public async Task<IActionResult> GetMessagesByBody(int userid)
         {
             var logs = await _context.message_logs
-                .Where(l => l.Status == "sent" && l.PlatformId==1)
+                .Where(l => l.Status == "sent" && l.PlatformId == 1 && l.UserId == userid)
                 .Select(l => new
                 {
                     Body = l.body ?? "",                // 👈 هنا بنمنع NULL يوصل للـ reader

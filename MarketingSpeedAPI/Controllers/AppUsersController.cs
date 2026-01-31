@@ -30,7 +30,9 @@ namespace MarketingSpeedAPI.Controllers
                 return Conflict(new { message = "User already exists" });
 
             int? marketerId = null;
-
+             
+            var currUser = await _context.Users
+                .FirstOrDefaultAsync(u => u.email == req.Email);
             // 2️⃣ التحقق من البروموكود
             if (!string.IsNullOrWhiteSpace(req.PromoCode))
             {
