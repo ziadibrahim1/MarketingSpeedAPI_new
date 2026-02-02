@@ -2950,6 +2950,33 @@ namespace MarketingSpeedAPI.Controllers
         }
 
 
+        [HttpPost("add-members-to-existing-group/{userId}")]
+        public async Task<IActionResult> AddMembersToExistingGroup(long userId, [FromBody] AddMembersToExistingGroupRequest req)
+        {
+            var account = await _context.user_accounts
+                .FirstOrDefaultAsync(a =>
+                    a.UserId == (int)userId &&
+                    a.PlatformId == 1 &&
+                    a.Status == "connected");
+
+            if (account == null)
+                return Ok(new { success = false, message = "No connected account found" });
+
+            if (string.IsNullOrWhiteSpace(req.GroupId) ||
+                req.Members == null ||
+                req.Members.Count == 0)
+                return Ok(new { success = false, message = "Invalid request" });
+
+            
+            // ❌ لا إنشاء — فقط إضافة
+            return await AddGroupMembers(userId, new AddGroupMembersRequest
+            {
+                GroupId = req.GroupId,
+                Members = req.Members
+            });
+        }
+
+
 
     }
 }

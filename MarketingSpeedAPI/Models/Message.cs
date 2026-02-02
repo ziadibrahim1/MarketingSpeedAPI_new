@@ -62,6 +62,11 @@
         public int UserId { get; set; }
         public DateTime CreatedAt { get; set; } = DateTime.Now;
     }
+    public class AddMembersToExistingGroupRequest
+    {
+        public string GroupId { get; set; }
+        public List<string> Members { get; set; }
+    }
 
     public class SendMessageRequests
     {
