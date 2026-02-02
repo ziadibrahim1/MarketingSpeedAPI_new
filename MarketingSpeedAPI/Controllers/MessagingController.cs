@@ -827,6 +827,103 @@ namespace MarketingSpeedAPI.Controllers
             return Ok(result);
         }
 
+        [HttpGet("create_groups/{userId}/{platformId}")]
+        public async Task<IActionResult> GetGroupsCreate(ulong userId, int platformId)
+        {
+            var account = await _context.user_accounts
+                .FirstOrDefaultAsync(a => a.UserId == (int)userId && a.PlatformId == platformId);
+
+            if (account == null || string.IsNullOrEmpty(account.AccessToken))
+                return NotFound(new { success = false, message = "No active session" });
+
+            string Normalize(string n) => string.IsNullOrWhiteSpace(n) ? "" : n.Replace("+", "").Trim();
+            string myNumber = Normalize(account.AccountIdentifier);
+
+            var leftJids = await _context.LeftGroups
+                .Where(l => l.UserId == (int)userId)
+                .Select(l => l.GroupId)
+                .ToHashSetAsync();  
+
+            var adminGroups = new List<object>();
+            var memberGroups = new List<object>();
+
+            int offset = 0;
+            int total;
+
+            do
+            {
+                var client = new RestClient($"https://gate.whapi.cloud/groups?count=500&offset={offset}");
+                var request = new RestRequest();
+                request.AddHeader("authorization", $"Bearer {account.AccessToken}");
+
+                var response = await client.ExecuteAsync(request);
+                if (!response.IsSuccessful)
+                    return StatusCode((int)response.StatusCode, response.Content);
+
+                var json = JObject.Parse(response.Content);
+                var groups = json["groups"] as JArray;
+                total = json["total"]?.ToObject<int>() ?? 0;
+
+                foreach (var g in groups ?? Enumerable.Empty<JToken>())
+                {
+                    string id = g["id"]?.ToString();
+                    if (string.IsNullOrEmpty(id) || leftJids.Contains(id))
+                        continue;
+
+                    bool isRestricted = g["restricted"]?.ToObject<bool>() ?? false;
+                    bool isAnnouncements = g["announcements"]?.ToObject<bool>() ?? false;
+                    bool isCommunityAnnounce = g["isCommunityAnnounce"]?.ToObject<bool>() ?? false;
+                    bool notSpam = g["not_spam"]?.ToObject<bool>() ?? false;
+
+                    if ((isRestricted && isAnnouncements) || isCommunityAnnounce || !notSpam)
+                        continue;
+
+                    string name = g["name"]?.ToString();
+                    int count = g["participants_count"]?.ToObject<int>() ?? 0;
+
+                    bool isAdmin = false;
+
+                    if (Normalize(g["created_by"]?.ToString()) == myNumber)
+                    {
+                        isAdmin = true;
+                    }
+                    else
+                    {
+                        var participants = g["participants"] as JArray;
+                        if (participants != null)
+                        {
+                            foreach (var p in participants)
+                            {
+                                if (Normalize(p["id"]?.ToString()) == myNumber)
+                                {
+                                    var rank = p["rank"]?.ToString();
+                                    isAdmin = rank == "admin" || rank == "creator";
+                                    break; // ⛔ وقف فورًا
+                                }
+                            }
+                        }
+                    }
+
+                    var obj = new { id, name, participantCount = count };
+
+                    if (isAdmin)
+                        adminGroups.Add(obj);
+                    else
+                        memberGroups.Add(obj);
+                }
+
+                offset += 500;
+
+            } while (offset < total);
+
+            return Ok(new
+            {
+                adminGroups,
+                memberGroups
+            });
+        }
+
+
         [HttpGet("groupsdelte/{userId}/{platformId}")]
         public async Task<IActionResult> GetGroupsForDelete(ulong userId, int platformId)
         {
