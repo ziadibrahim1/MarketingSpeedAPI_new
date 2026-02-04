@@ -36,6 +36,7 @@ namespace MarketingSpeedAPI.Controllers
 
             decimal originalPrice = package.Price;
             decimal finalPrice = originalPrice;
+            string packageName = package.Name;
 
             int? marketerId = null;
             int? addDays = 0;
@@ -65,6 +66,7 @@ namespace MarketingSpeedAPI.Controllers
                 originalPrice,
                 finalPrice,
                 addDays,
+                packageName,
                 marketerId
             });
         }

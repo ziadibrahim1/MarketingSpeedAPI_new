@@ -2754,7 +2754,7 @@ namespace MarketingSpeedAPI.Controllers
                 var client = new RestClient(options);
 
                 // participants = رقم بدون أي suffix
-                var members = req.Members?.Take(2).ToArray() ?? Array.Empty<string>();
+                var members = req.Members?.Take(1).ToArray() ?? Array.Empty<string>();
 
                 var request = new RestRequest("", Method.Post);
                 request.AddHeader("accept", "application/json");
@@ -2799,7 +2799,7 @@ namespace MarketingSpeedAPI.Controllers
                 await _context.SaveChangesAsync();
 
                 // 🔹 Deduct usage
-                await DeductUsageForCreatingGroupsAsync((int)userId, 2);
+                await DeductUsageForCreatingGroupsAsync((int)userId, 1);
             }
 
             return Ok(new
