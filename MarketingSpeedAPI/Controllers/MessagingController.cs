@@ -2122,197 +2122,166 @@ namespace MarketingSpeedAPI.Controllers
         private static readonly object _suffixLock = new();
 
         [HttpPost("send-to-single-member/{userId}")]
-        public async Task<IActionResult> SendToSingleMember(ulong userId, [FromBody] SendSingleMemberRequest req)
+        public async Task<IActionResult> SendToSingleMember(
+    ulong userId,
+    [FromBody] SendSingleMemberRequest req)
         {
             if (string.IsNullOrEmpty(req.Recipient))
                 return BadRequest(new { success = false, blocked = false, error = "Recipient is required" });
 
             var account = await _context.user_accounts
-                .FirstOrDefaultAsync(a => a.UserId == (int)userId &&
-                                          a.PlatformId == req.PlatformId &&
-                                          a.Status == "connected");
+                .FirstOrDefaultAsync(a =>
+                    a.UserId == (int)userId &&
+                    a.PlatformId == req.PlatformId &&
+                    a.Status == "connected");
 
-            if (account == null  )
+            if (account == null)
                 return Ok(new { success = false, blocked = false, error = "No connected account found" });
 
             if (NormalizePhone(account.AccountIdentifier) == NormalizePhone(req.Recipient))
                 return Ok(new { success = false, blocked = false, error = "Recipient number matches sender" });
 
-            var senderNumber = NormalizePhone(account.AccountIdentifier);
-            var body = new Dictionary<string, object?> { { "to", NormalizePhone(req.Recipient) } };
-
-            if (req.ImageUrls != null && req.ImageUrls.Any())
-            {
-                var mediaUrl = req.ImageUrls.First();
-                body[GetMessageTypeFromExtension(mediaUrl)] = mediaUrl;
-                if (req.Message != null) body["text"] = req.Message;
-            }
-            else if (!string.IsNullOrEmpty(req.Message))
-            {
-                body["text"] = req.Message;
-            }
-
-            if (body.Count <= 1)
-                return Ok(new { success = false, blocked = false, error = "Message body and attachments are empty" });
-             
-            bool success = false;
-            bool isBlocked = false;
-            string? errorMessage = null;
-            string? externalId = null;
-
-            var whapiClient = new RestClient(new RestClientOptions("https://gate.whapi.cloud"));
-            RestRequest sendReq;
-
             string recipient = NormalizePhone(req.Recipient);
+            string? finalText = !string.IsNullOrWhiteSpace(req.Message) ? SpinText(req.Message) : null;
+            bool hasAttachment = req.ImageUrls != null && req.ImageUrls.Any();
 
-            if (req.ImageUrls != null && req.ImageUrls.Any())
+            bool overallSuccess = true;
+            bool blocked = false;
+            string? errorMessage = null;
+            List<string> externalIds = new();
+
+            // ----------------------------------------
+            // إرسال مرفقات
+            // ----------------------------------------
+            if (hasAttachment)
             {
-                sendReq = new RestRequest("messages/image", Method.Post);
-                sendReq.AddHeader("authorization", $"Bearer {account.AccessToken}");
-                sendReq.AddHeader("accept", "application/json");
-                sendReq.AddHeader("content-type", "application/json");
-
-                sendReq.AddJsonBody(new
+                for (int i = 0; i < req.ImageUrls!.Count; i++)
                 {
-                    to = recipient,
-                    media = req.ImageUrls.First(),
-                    caption = req.Message
-                });
-            }
-            else
+                    string mediaUrl = req.ImageUrls[i];
+                    string ext = Path.GetExtension(mediaUrl).ToLower();
+                    bool isLast = i == req.ImageUrls.Count - 1;
+
+                    string endpoint = "";
+                    var body = new Dictionary<string, object?>
             {
-                sendReq = new RestRequest("messages/text", Method.Post);
-                sendReq.AddHeader("authorization", $"Bearer {account.AccessToken}");
-                sendReq.AddHeader("accept", "application/json");
-                sendReq.AddHeader("content-type", "application/json");
+                { "to", recipient }
+            };
 
-                sendReq.AddJsonBody(new
-                {
-                    to = recipient,
-                    body = req.Message
-                });
-            }
-
-            for (int attempt = 0; attempt < 2; attempt++)
-            {
-                var res = await whapiClient.ExecuteAsync(sendReq);
-
-                if (res.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
-                {
-                    await Task.Delay(3500);
-                    continue;
-                }
-
-                success = res.IsSuccessful;
-                errorMessage = success ? null : (res.ErrorMessage ?? res.Content);
-
-                if (success)
-                {
-                    try
+                    if (ext is ".jpg" or ".jpeg" or ".png")
                     {
-                        var json = JObject.Parse(res.Content);
-                        externalId = json["message"]?["id"]?.ToString();
+                        endpoint = "messages/image";
+                        body["media"] = mediaUrl;
                     }
-                    catch { }
+                    else if (ext == ".mp4")
+                    {
+                        endpoint = "messages/video";
+                        body["media"] = mediaUrl;
+                    }
+                    else if (ext is ".pdf" or ".docx")
+                    {
+                        endpoint = "messages/document";
+                        body["media"] = mediaUrl;
+                        body["mimetype"] = ext == ".pdf"
+                            ? "application/pdf"
+                            : "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+                    }
+                    else
+                    {
+                        continue;
+                    }
+
+                    if (isLast && finalText != null)
+                        body["caption"] = finalText;
+
+                    var result = await SendMediaMessage(account, endpoint, body);
+
+                    if (!result.success)
+                    {
+                        overallSuccess = false;
+                        errorMessage = result.error;
+                        blocked = result.blocked;
+                        if (blocked) break;
+                    }
+                    else if (result.externalId != null)
+                    {
+                        externalIds.Add(result.externalId);
+                    }
+
+                    if (isLast)
+                    {
+                        await LogMessage(
+                            userId,
+                            (ulong?)req.MainMessageId,
+                            recipient,
+                            account,
+                            req.Message,
+                            null,
+                            result.success,
+                            result.error,
+                            result.externalId
+                        );
+                    }
+
+                    if (i < req.ImageUrls.Count - 1)
+                        await Task.Delay(300);
                 }
 
-                isBlocked =
-                    !success &&
-                    (
-                        (errorMessage?.Contains("Recipient_not_found", StringComparison.OrdinalIgnoreCase) ?? false) ||
-                        (errorMessage?.Contains("blocked", StringComparison.OrdinalIgnoreCase) ?? false)
+                // لو كل المرفقات فشلت ونص موجود
+                if (finalText != null && externalIds.Count == 0)
+                {
+                    var textResult = await SendTextMessage(account, recipient, finalText);
+
+                    await LogMessage(
+                        userId,
+                        (ulong?)req.MainMessageId,
+                        recipient,
+                        account,
+                        req.Message,
+                        null,
+                        textResult.success,
+                        textResult.error,
+                        textResult.externalId
                     );
 
-                break;
-            }
-
-            
-            try
-            {
-                var log = new MessageLog
-                {
-                    MessageId = (int)(req.MainMessageId ?? 0),
-                    Recipient = req.Recipient,
-                    sender = senderNumber,
-                    UserId = (int)userId,
-                    body = req.Message,
-                    PlatformId = account.PlatformId,
-                    Status = success ? "sent" : "failed",
-                    ErrorMessage = errorMessage,
-                    AttemptedAt = DateTime.Now,
-                    ExternalMessageId = externalId
-                };
-
-                _context.message_logs.Add(log);
-                await _context.SaveChangesAsync();
-            }
-            catch { }
-
-            if (success)
-            {
-                try
-                {
-                    var activeSubs = await _context.UserSubscriptions
-                        .Where(s => s.UserId == (int)userId &&
-                                    s.IsActive &&
-                                    s.PaymentStatus == "paid" &&
-                                    s.StartDate <= DateTime.Now &&
-                                    s.EndDate >= DateTime.Now)
-                        .OrderBy(s => s.StartDate)
-                        .ToListAsync();
-
-                    foreach (var sub in activeSubs)
-                    {
-                        var feature = await _context.PackageFeatures
-                            .FirstOrDefaultAsync(f => f.PackageId == sub.PackageId && f.forMembers == true);
-
-                        if (feature == null)
-                            continue;
-
-                        var usage = await _context.subscription_usage
-                            .FirstOrDefaultAsync(u => u.UserId == (int)userId &&
-                                                      u.SubscriptionId == sub.Id &&
-                                                      u.FeatureId == feature.Id);
-
-                        if (usage == null)
-                        {
-                            usage = new SubscriptionUsage
-                            {
-                                UserId = (int)userId,
-                                SubscriptionId = sub.Id,
-                                PackageId = sub.PackageId,
-                                FeatureId = feature.Id,
-                                LimitCount = feature.LimitCount,
-                                UsedCount = 1,
-                                LastUsedAt = DateTime.Now
-                            };
-                            _context.subscription_usage.Add(usage);
-                            await _context.SaveChangesAsync();
-                            break;
-                        }
-                        else if (usage.LimitCount > usage.UsedCount)
-                        {
-                            usage.UsedCount += 1;
-                            usage.LastUsedAt = DateTime.Now;
-                            _context.subscription_usage.Update(usage);
-                            await _context.SaveChangesAsync();
-                            break;
-                        }
-                    }
+                    if (textResult.externalId != null)
+                        externalIds.Add(textResult.externalId);
                 }
-                catch { }
+            }
+            // ----------------------------------------
+            // رسالة نصية فقط
+            // ----------------------------------------
+            else if (finalText != null)
+            {
+                var result = await SendTextMessage(account, recipient, finalText);
+
+                overallSuccess = result.success;
+                blocked = result.blocked;
+                errorMessage = result.error;
+
+                if (result.externalId != null)
+                    externalIds.Add(result.externalId);
+
+                await MembersLogMessage(
+                    userId,
+                    (ulong?)req.MainMessageId,
+                    recipient,
+                    account,
+                    req.Message,
+                    null,
+                    result.success,
+                    result.error,
+                    result.externalId 
+                );
             }
 
-            // ------------------------------------------
-            // النتيجة النهائية كما هي
-            // ------------------------------------------
             return Ok(new
             {
-                success,
+                success = overallSuccess,
                 req.MainMessageId,
-                blocked = isBlocked,
+                blocked,
                 error = errorMessage,
-                externalId
+                externalIds,
+                sentCount = externalIds.Count
             });
         }
 
@@ -2569,7 +2538,8 @@ namespace MarketingSpeedAPI.Controllers
                     Status = success ? "sent" : "failed",
                     ErrorMessage = error,
                     AttemptedAt = DateTime.Now,
-                    ExternalMessageId = externalId
+                    ExternalMessageId = externalId,
+                    toGroupMember = false
                 };
 
                 _context.message_logs.Add(log);
@@ -2577,7 +2547,39 @@ namespace MarketingSpeedAPI.Controllers
             }
             catch { }
         }
+        private async Task MembersLogMessage(
+           ulong userId,
+           ulong? mainMessageId,
+           string groupId,
+           dynamic account,
+           string? message,
+           bool? fromChates,
+           bool success,
+           string? error,
+           string? externalId)
+        {
+            try
+            {
+                var log = new MessageLog
+                {
+                    MessageId = (int)(mainMessageId ?? 0),
+                    Recipient = groupId,
+                    sender = NormalizePhone(account.AccountIdentifier),
+                    UserId = (int)userId,
+                    body = message,
+                    PlatformId = fromChates == true ? 3 : account.PlatformId,
+                    Status = success ? "sent" : "failed",
+                    ErrorMessage = error,
+                    AttemptedAt = DateTime.Now,
+                    ExternalMessageId = externalId,
+                    toGroupMember = true
+                };
 
+                _context.message_logs.Add(log);
+                await _context.SaveChangesAsync();
+            }
+            catch { }
+        }
         [HttpGet("daily-limit/{userId}")]
         public async Task<IActionResult> GetDailyLimit(ulong userId)
         {
