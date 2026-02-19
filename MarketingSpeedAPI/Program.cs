@@ -2,6 +2,7 @@
 using MarketingSpeedAPI.Data;
 using MarketingSpeedAPI.Hubs;
 using MarketingSpeedAPI.Models;
+using MarketingSpeedAPI.Models.MarketingSpeedAPI.Services;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 
@@ -89,22 +90,13 @@ builder.Services.AddCors(options =>
 });
 #endregion
 
-#region Telegram Manager
-builder.Services.AddSingleton<Func<TelegramClientManager>>(sp =>
-{
-    return () =>
-    {
-        var opts = sp
-            .GetRequiredService<IOptions<TelegramOptions>>()
-            .Value;
+builder.Services.AddScoped<TelegramSessionService>();
 
-        return new TelegramClientManager(
-            opts.ApiId,
-            opts.ApiHash,
-            opts.BaseDataDir);
-    };
+builder.Services.AddHttpClient<TelegramClientManager>(c =>
+{
+    c.BaseAddress = new Uri("http://localhost:8001");
 });
-#endregion
+
 
 #region SignalR
 builder.Services.AddSignalR();

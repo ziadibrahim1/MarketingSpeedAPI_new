@@ -13,6 +13,7 @@ namespace MarketingSpeedAPI.Data
         public DbSet<PlatformDto> Platforms { get; set; }
         public DbSet<City> Cities { get; set; }
         public DbSet<TermsAndConditions> TermsAndConditions { get; set; }
+        public DbSet<TelegramSession> TelegramSessions => Set<TelegramSession>();
         public DbSet<Conversation> Conversations { get; set; }
         public DbSet<AppUser> app_users { get; set; }
         public DbSet<Marketer> Marketers { get; set; }
