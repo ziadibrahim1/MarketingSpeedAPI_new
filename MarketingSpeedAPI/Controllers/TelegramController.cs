@@ -382,7 +382,42 @@ namespace MarketingSpeedAPI.Controllers
                 });
             }
         }
+        [HttpPost("join-by-link")]
+        public async Task<IActionResult> JoinByLink([FromBody] JoinByLinkRequest request)
+        {
+            try
+            {
+                var result = await _tg.JoinByLinkAsync(
+                    request.UserId,
+                    request.Link
+                );
 
+                if (!result.Success)
+                {
+                    return BadRequest(new
+                    {
+                        success = false,
+                        message = result.Error ?? result.Message
+                    });
+                }
+
+                return Ok(new
+                {
+                    success = true,
+                    type = result.Type,
+                    title = result.Title,
+                    message = result.Message
+                });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new
+                {
+                    success = false,
+                    message = ex.Message
+                });
+            }
+        }
 
         [HttpPost("logout/{userId}")]
         public async Task<IActionResult> Logout(long userId)

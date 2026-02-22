@@ -189,10 +189,24 @@ namespace MarketingSpeedAPI.Models
     {
         public long UserId { get; set; }
         public long Id { get; set; }
-        public long? AccessHash { get; set; } // مهم للقنوات والسوبرجروبات
-        public string PeerType { get; set; }  // normal_group | supergroup | channel
+        public long? AccessHash { get; set; }
+        public string PeerType { get; set; }  
     }
 
+    public class JoinByLinkRequest
+    {
+        public long UserId { get; set; }
+        public string Link { get; set; } = string.Empty;
+    }
+    public class TgJoinResponse
+    {
+        public bool Success { get; set; }
+        public string? Type { get; set; }
+        public string? Title { get; set; }
+        public string? Message { get; set; }
+        public string? Error { get; set; }
+        public double? FloodWait { get; set; }
+    }
     public class TeleGroupInfos
     {
         public string Id { get; set; } = "";

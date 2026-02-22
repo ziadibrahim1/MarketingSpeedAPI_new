@@ -391,10 +391,59 @@
                     chat_id = chatId,
                     user_ids = userIds
                 });
-
+            var content = await response.Content.ReadAsStringAsync();
             response.EnsureSuccessStatusCode();
         }
 
+        public async Task<TgJoinResponse> JoinByLinkAsync(long userId, string link)
+        {
+            var response = await _http.PostAsJsonAsync(
+                $"dialogs/join/{userId}",
+                new
+                {
+                    link = link.StartsWith("http")
+                        ? link
+                        : $"https://t.me/{link}"
+                });
+
+            var content = await response.Content.ReadAsStringAsync();
+
+            TgJoinResponse? result = null;
+
+            try
+            {
+                result = JsonSerializer.Deserialize<TgJoinResponse>(
+                    content,
+                    new JsonSerializerOptions
+                    {
+                        PropertyNameCaseInsensitive = true
+                    });
+            }
+            catch
+            {
+                return new TgJoinResponse
+                {
+                    Success = false,
+                    Error = content
+                };
+            }
+
+            if (!response.IsSuccessStatusCode)
+            {
+                return new TgJoinResponse
+                {
+                    Success = false,
+                    Error = result?.Error ?? $"HTTP {response.StatusCode}",
+                    FloodWait = result?.FloodWait ?? 0
+                };
+            }
+
+            return result ?? new TgJoinResponse
+            {
+                Success = false,
+                Error = "Empty response"
+            };
+        }
         public async Task LogoutAsync(long userId)
         {
             var s =await _http.PostAsync($"/logout/{userId}", null);
