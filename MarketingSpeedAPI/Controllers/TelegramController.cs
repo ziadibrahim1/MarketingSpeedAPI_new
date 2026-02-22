@@ -168,19 +168,14 @@ namespace MarketingSpeedAPI.Controllers
             {
                 foreach (var failure in result.Failures)
                 {
-                    logs.Add(new MessageLog
-                    {
-                        MessageId = 0,
-                        Recipient = failure.Reason, // هنا غالباً MemberId
-                        PlatformId = 2, // رقم Telegram عندك
-                        Status = "failed",
-                        ErrorMessage = failure.Details,
-                        toGroupMember = true,
-                        UserId = (int)request.UserId,
-                        body = request.Message,
-                        sender = "telegram_bot",
-                        AttemptedAt = DateTime.UtcNow
-                    });
+                    await LogTelegramGroupMessage(
+                   request.UserId,
+                   request.ChatId,
+                   request.Message,
+                   false,
+                   result.FloodWait > 0 ? $"FloodWait: {result.FloodWait}s" : null
+               );
+
                 }
             }
 
@@ -189,29 +184,23 @@ namespace MarketingSpeedAPI.Controllers
 
             for (int i = 0; i < successCount; i++)
             {
-                logs.Add(new MessageLog
-                {
-                    MessageId = 0,
-                    Recipient = "unknown", // لأن معندناش MemberId هنا
-                    PlatformId = 2,
-                    Status = "sent",
-                    toGroupMember = true,
-                    UserId = (int)request.UserId,
-                    body = request.Message,
-                    sender = "telegram_bot",
-                    AttemptedAt = DateTime.UtcNow
-                });
+
+                await LogTelegramGroupMessage(
+                  request.UserId,
+                  request.ChatId,
+                  request.Message,
+                  true,
+                  result.FloodWait > 0 ? $"FloodWait: {result.FloodWait}s" : null
+              );
+
             }
 
-            _context.message_logs.AddRange(logs);
-            await _context.SaveChangesAsync();
 
             if (result.FloodWait > 0)
                 return StatusCode(429, result);
 
             return Ok(result);
         }
-
         [HttpPost("send-to-groups")]
         public async Task<IActionResult> SendToGroups([FromBody] SendToGroupsRequest request)
         {
