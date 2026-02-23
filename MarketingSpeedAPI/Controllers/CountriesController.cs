@@ -116,7 +116,7 @@ namespace MarketingSpeedAPI.Controllers
             // 🔹 جلب المجموعات
             var groups = await _context.company_groups
                 .Where(g => g.IsActive
-                            && !g.IsHidden && g.PlatformId == 2
+                            && !g.IsHidden && g.PlatformId == 1
                             && g.CountryId == CountryID
                             && g.CategoryId == CategoryID
                             && !joinedInviteCodes.Contains(g.InviteLink))
