@@ -179,23 +179,14 @@ namespace MarketingSpeedAPI.Controllers
                     verification_code = code,
                     verification_code_expires_at = DateTime.Now.AddMinutes(2),
                     created_at = DateTime.Now,
-                    is_email_verified = false
+                    is_email_verified = true
                 };
 
                 // 1️⃣ احفظ اليوزر الأول
                 _context.Users.Add(user);
                 await _context.SaveChangesAsync();
 
-                // 2️⃣ ابعت الإيميل بعد الحفظ
-                var emailSent = await _emailService.SendVerificationEmailAsync(user.email, code);
-                if (!emailSent)
-                {
-                    // لو حابب تلغي التسجيل لو فشل الإيميل
-                    _context.Users.Remove(user);
-                    await _context.SaveChangesAsync();
-
-                    return StatusCode(500, new { error = "فشل إرسال بريد التحقق" });
-                }
+                
 
                 // 3️⃣ رجع الرد للفرونت
                 return Ok(new
