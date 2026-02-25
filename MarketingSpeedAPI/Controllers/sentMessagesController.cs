@@ -29,7 +29,7 @@ namespace MarketingSpeedAPI.Controllers
         public async Task<IActionResult> GetMessagesByBody(int userid)
         {
             var logs = await _context.message_logs
-                .Where(l => l.Status == "sent" && l.PlatformId == 1 && l.UserId == userid)
+                .Where(l => l.Status == "sent"  && l.UserId == userid)
                 .Select(l => new
                 {
                     Body = l.body ?? "",                // 👈 هنا بنمنع NULL يوصل للـ reader
@@ -103,184 +103,6 @@ namespace MarketingSpeedAPI.Controllers
             });
         }
 
-        [HttpPost("resend/{id}")]
-        public async Task<IActionResult> ResendMessage(int id)
-        {
-            var msg = await _context.Messages.FindAsync(id);
-            if (msg == null)
-                return NotFound(new { success = false, message = "Message not found" });
-
-            var today = DateTime.Now.Date;
-
-            var subscription = await _context.UserSubscriptions
-                .Where(s => s.UserId == msg.UserId &&
-                            s.IsActive &&
-                            s.PaymentStatus == "paid" &&
-                            s.StartDate <= today &&
-                            s.EndDate >= today)
-                .OrderByDescending(s => s.EndDate)
-                .FirstOrDefaultAsync();
-
-            if (subscription == null)
-                return Ok(new { success = false, status = "0", message = "Subscription invalid" });
-
-            var account = await _context.user_accounts
-                .FirstOrDefaultAsync(a => a.UserId == msg.UserId && a.PlatformId == 1 && a.Status == "connected");
-
-            if (account == null || string.IsNullOrEmpty(account.WasenderSessionId?.ToString()))
-                return Ok(new { success = false, status = "1", message = "No account found" });
-
-            var results = new List<object>();
-            var random = new Random();
-
-            string AddRandomDots(string text)
-            {
-                var options = new[] { "", ".", "..", "..." };
-                var dots = options[random.Next(options.Length)];
-                return $"{text}{dots}";
-            }
-
-            string GetMessageTypeFromExtension(string fileUrl)
-            {
-                var extension = Path.GetExtension(fileUrl).ToLower();
-                if (extension is ".jpg" or ".jpeg" or ".png" or ".gif" or ".webp")
-                    return "imageUrl";
-                else if (extension is ".mp4" or ".mov" or ".avi" or ".mkv")
-                    return "videoUrl";
-                else
-                    return "documentUrl";
-            }
-
-            async Task<RestResponse> SendWithRetryAsync(RestRequest request, int maxRetries = 3)
-            {
-                for (int retries = 0; retries < maxRetries; retries++)
-                {
-                    var response = await _client.ExecuteAsync(request);
-                    if (response.Content == null || !response.Content.Contains("retry_after"))
-                        return response;
-
-                    try
-                    {
-                        var retryAfter = JObject.Parse(response.Content)["retry_after"]?.ToObject<int>() ?? 5;
-                        await Task.Delay(retryAfter * 1000);
-                    }
-                    catch
-                    {
-                        await Task.Delay(5000);
-                    }
-                }
-                return await _client.ExecuteAsync(request);
-            }
-
-            async Task SendAndLogAsync(string groupId, Dictionary<string, object?> body, string? fileUrl = null)
-            {
-                var request = new RestRequest("/api/send-message", Method.Post);
-                request.AddHeader("Authorization", $"Bearer {account.AccessToken}");
-                request.AddHeader("Content-Type", "application/json");
-                request.AddJsonBody(body);
-
-                var response = await SendWithRetryAsync(request);
-
-                string? externalId = null;
-                if (response.IsSuccessful && !string.IsNullOrEmpty(response.Content))
-                {
-                    try
-                    {
-                        var json = JObject.Parse(response.Content);
-                        externalId = json["data"]?["msgId"]?.ToString();
-                    }
-                    catch { }
-                }
-
-                var log = new MessageLog
-                {
-                    MessageId = msg.Id,
-                    Recipient = groupId,
-                    PlatformId = account.PlatformId,
-                    Status = response.IsSuccessful ? "sent" : "failed",
-                    ErrorMessage = response.IsSuccessful ? null : response.Content,
-                    AttemptedAt = DateTime.Now,
-                    ExternalMessageId = externalId
-                };
-                _context.message_logs.Add(log);
-
-                if (response.IsSuccessful)
-                {
-                    msg.Status = "sent";
-                    msg.SentAt = DateTime.Now;
-                    results.Add(new { groupId, fileUrl, success = true, externalId });
-                }
-                else
-                {
-                    results.Add(new { groupId, fileUrl, success = false, error = response.Content });
-                }
-
-                await _context.SaveChangesAsync();
-            }
-
-            var previousRecipients = await _context.message_logs
-                .Where(l => l.MessageId == msg.Id)
-                .Select(l => l.Recipient)
-                .Distinct()
-                .ToListAsync();
-
-            var imageUrls = string.IsNullOrEmpty(msg.Attachments)
-                ? new List<string>()
-                : JsonConvert.DeserializeObject<List<string>>(msg.Attachments) ?? new();
-
-            foreach (var groupId in previousRecipients)
-            {
-                if (imageUrls.Any())
-                {
-                    for (int i = 0; i < imageUrls.Count; i++)
-                    {
-                        bool isLast = i == imageUrls.Count - 1;
-                        var msgTypeStr = GetMessageTypeFromExtension(imageUrls[i]);
-
-                        var body = new Dictionary<string, object?>
-                {
-                    { "to", groupId },
-                    { msgTypeStr, imageUrls[i] }
-                };
-
-                        if (isLast && !string.IsNullOrWhiteSpace(msg.Body))
-                            body.Add("text", AddRandomDots(msg.Body));
-
-                        await SendAndLogAsync(groupId, body, imageUrls[i]);
-                    }
-                }
-                else if (!string.IsNullOrWhiteSpace(msg.Body))
-                {
-                    var body = new Dictionary<string, object?>
-            {
-                { "to", groupId },
-                { "text", AddRandomDots(msg.Body) }
-            };
-                    await SendAndLogAsync(groupId, body);
-                }
-
-                if (previousRecipients.Count > 1 && groupId != previousRecipients.Last())
-                {
-                    int delay = random.Next(5000, 7001);
-                    await Task.Delay(delay);
-                }
-            }
-
-            if (msg.Status == "pending")
-                msg.Status = "failed";
-
-            await _context.SaveChangesAsync();
-
-            return Ok(new
-            {
-                success = true,
-                status = "2",
-                message = msg.Body,
-                messageId = msg.Id,
-                results
-            });
-        }
-
         [HttpGet("user/{userId}/whatsapp-stats")]
         public async Task<IActionResult> GetUserWhatsappStats(long userId)
         {
@@ -297,7 +119,6 @@ namespace MarketingSpeedAPI.Controllers
             // 🔹 نأتي بالرسائل المرسلة خلال هذا اليوم فقط
             var logs = await _context.message_logs
                 .Where(l => (l.Status == "sent" || l.Status == "deleted")
-                            && l.PlatformId == 1
                             && l.UserId == userId
                             && l.AttemptedAt >= startUtc
                             && l.AttemptedAt < endUtc )
