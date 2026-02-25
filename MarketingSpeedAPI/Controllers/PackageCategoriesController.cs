@@ -16,7 +16,6 @@ namespace MarketingSpeedAPI.Controllers
             _context = context;
         }
 
-        // GET: api/PackageCategories
         [HttpGet]
         public async Task<ActionResult<IEnumerable<PackageCategory>>> GetCategories()
         {

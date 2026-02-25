@@ -10,7 +10,6 @@ namespace MarketingSpeedAPI.Controllers
     public class AppUsersController : ControllerBase
     {
         private readonly AppDbContext _context;
-
         public AppUsersController(AppDbContext context)
         {
             _context = context;
@@ -107,6 +106,5 @@ namespace MarketingSpeedAPI.Controllers
                 throw;
             }
         }
-
     }
 }

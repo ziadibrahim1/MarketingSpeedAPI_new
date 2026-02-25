@@ -1,17 +1,13 @@
-﻿using JamesWright.SimpleHttp;
-using MarketingSpeedAPI.Data;
+﻿using MarketingSpeedAPI.Data;
 using MarketingSpeedAPI.Models;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Options;
-using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using RestSharp;
-using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.RegularExpressions;
-using static Org.BouncyCastle.Asn1.Cmp.Challenge;
 
 namespace MarketingSpeedAPI.Controllers
 {
@@ -39,126 +35,7 @@ namespace MarketingSpeedAPI.Controllers
 
 
 
-        [HttpPost("send-to-groups/{userId}")]
-        public async Task<IActionResult> SendToGroups(ulong userId, [FromBody] SendGroupsRequest req)
-        {
-           
-            var today = DateTime.Now.Date;
-            var isSubscribed = await _context.UserSubscriptions
-                .AnyAsync(s => s.UserId == (int)userId && s.IsActive && s.PaymentStatus == "paid" && s.StartDate <= today && s.EndDate >= today);
-
-            if (!isSubscribed)
-                return Ok(new { success = false, status = "0", message = "Subscription invalid" });
-
-            var account = await _context.user_accounts
-                .AsNoTracking()
-                .FirstOrDefaultAsync(a => a.UserId == (int)userId && a.PlatformId == 1 && a.Status == "connected");
-
-            if (account == null || string.IsNullOrEmpty(account.WasenderSessionId?.ToString()))
-                return Ok(new { success = false, status = "1", message = "No account found" });
-
-      
-            var uniqueGroupIds = new HashSet<string>(req.GroupIds).ToList();
-
-            var blockedGroupIds = await _context.BlockedGroups
-                .Where(bg => bg.UserId == (int)userId && uniqueGroupIds.Contains(bg.GroupId))
-                .Select(bg => bg.GroupId)
-                .ToHashSetAsync();
-
-            var groupsToSend = uniqueGroupIds.Except(blockedGroupIds).ToList();
-            if (!groupsToSend.Any())
-                return Ok(new { success = true, message = "All provided groups are already blocked or the list is empty.", results = new List<object>() });
-
-            var newMessage = new Message
-            {
-                PlatformId = account.PlatformId,
-                UserId = (long)userId,
-                Title = $"Send to groups {DateTime.Now:yyyyMMddHHmmss}",
-                Body = req.Message ?? "", 
-                Targets = JsonConvert.SerializeObject(groupsToSend),
-                Attachments = (req.ImageUrls == null || !req.ImageUrls.Any()) ? null : JsonConvert.SerializeObject(req.ImageUrls),
-                Status = "pending",
-                CreatedAt = DateTime.Now
-            };
-            _context.Messages.Add(newMessage);
-            await _context.SaveChangesAsync(); 
-
-           
-            var allResults = new List<object>();
-            var allLogs = new List<MessageLog>();
-            var newBlockedGroups = new List<BlockedGroup>();
-
-            int consecutiveFailures = 0;
-            int sentInCurrentBatch = 0;
-
-            
-            foreach (var groupId in groupsToSend)
-            {
-                
-                if (consecutiveFailures >= WhatsAppSafetySettings.MaxConsecutiveFailures)
-                {
-                    break; 
-                }
-
-              
-                var (groupResults, groupLogs, wasBlocked) = await ProcessSingleGroupWithCautionAsync(groupId, req, account, newMessage.Id);
-
-                allResults.AddRange(groupResults);
-                allLogs.AddRange(groupLogs);
-
        
-                if (wasBlocked)
-                {
-                    consecutiveFailures++;
-                    if (!blockedGroupIds.Contains(groupId))
-                    {
-                        newBlockedGroups.Add(new BlockedGroup { GroupId = groupId, UserId = (int)userId });
-                        blockedGroupIds.Add(groupId);
-                    }
-                }
-                else
-                {
-                    consecutiveFailures = 0; 
-                }
-
-                sentInCurrentBatch++;
-
-             
-                if (groupId != groupsToSend.Last())
-                {
-                    if (sentInCurrentBatch >= WhatsAppSafetySettings.GroupsPerBatch)
-                    {
-                        await Task.Delay(WhatsAppSafetySettings.BatchRestSeconds * 1000);
-                        sentInCurrentBatch = 0;
-                    }
-                    else
-                    {
-                        int delay = Random.Shared.Next(WhatsAppSafetySettings.MinDelaySeconds * 1000, WhatsAppSafetySettings.MaxDelaySeconds * 1000);
-                        await Task.Delay(delay);
-                    }
-                }
-            }
-
-            
-            if (allLogs.Any())
-                _context.message_logs.AddRange(allLogs);
-            if (newBlockedGroups.Any())
-                _context.BlockedGroups.AddRange(newBlockedGroups);
-
-            newMessage.Status = allLogs.Any(l => l.Status == "sent") ? "sent" : "failed";
-            newMessage.SentAt = DateTime.Now;
-
-            await _context.SaveChangesAsync();
-           
-            return Ok(new
-            {
-                success = true,
-                status = "2",
-                message = newMessage.Body,
-                newMessageId = newMessage.Id,
-                results = allResults
-            });
-        }   
         private async Task<(List<object> results, List<MessageLog> logs, bool wasBlocked)> ProcessSingleGroupWithCautionAsync(
             string groupId, SendGroupsRequest req, UserAccount account, long messageId)
         {
@@ -275,99 +152,6 @@ namespace MarketingSpeedAPI.Controllers
             };
         }
 
-
-        [HttpPut("edit-message/{messageId}")]
-        public async Task<IActionResult> EditMessage(long messageId, [FromBody] EditMessageRequest req)
-        {
-            var message = await _context.Messages.FirstOrDefaultAsync(m => m.Id == messageId);
-            if (message == null)
-                return NotFound(new { success = false, message = "Message not found" });
-
-            message.Body = req.Message;
-            _context.Messages.Update(message);
-
-            var logs = await _context.message_logs
-                .Where(l => l.MessageId == messageId )
-                .ToListAsync();
-
-            foreach (var log in logs)
-            {
-                var account = await _context.user_accounts
-                    .FirstOrDefaultAsync(a => a.UserId == message.UserId && a.PlatformId == log.PlatformId);
-
-                if (account == null || !account.WasenderSessionId.HasValue)
-                    continue;
-
-                var request = new RestRequest($"/api/messages/{log.ExternalMessageId}", Method.Put);
-                request.AddHeader("Authorization", $"Bearer {account.AccessToken}");
-                request.AddHeader("Content-Type", "application/json");
-                request.AddJsonBody(new { text = req.Message });
-
-                var response = await _client.ExecuteAsync(request);
-                if (!response.IsSuccessful)
-                {
-                    log.Status = "failed";
-                    log.ErrorMessage = response.Content;
-                }
-                else
-                {
-                    log.Status = "sent";
-                    log.ErrorMessage = null;
-                }
-
-                _context.message_logs.Update(log);
-                await Task.Delay(5000);
-
-            }
-
-            await _context.SaveChangesAsync();
-            return Ok(new { success = true, message = "Message updated for all recipients" });
-        }
-
-      
-        [HttpDelete("delete-message/{messageId}/{PlatformId}/{UserId}")]
-        public async Task<IActionResult> DeleteMessage(long messageId, long UserId, long PlatformId)
-        {
-            var logs = await _context.message_logs
-                .Where(l => l.MessageId == messageId )
-                .ToListAsync();
-            if (!logs.Any())
-                return NotFound(new { success = false, message = "No logs found for this message" });
-            foreach (var log in logs)
-            {
-                var account = await _context.user_accounts
-                    .FirstOrDefaultAsync(a => a.UserId == UserId && a.PlatformId == PlatformId);
-                if (account == null || !account.WasenderSessionId.HasValue)
-                    continue;
-                var request = new RestRequest($"/api/messages/{log.ExternalMessageId}", Method.Delete);
-                request.AddHeader("Authorization", $"Bearer {account.AccessToken}");
-                var response = await _client.ExecuteAsync(request);
-                if (!response.IsSuccessful)
-                {
-                    log.ErrorMessage = response.Content;
-                    log.Status = "failed";
-                    _context.message_logs.Update(log);
-                }
-                else
-                {
-                    _context.message_logs.Remove(log);
-                }
-                await Task.Delay(7000);
-
-            }
-
-            var remainingLogs = await _context.message_logs.AnyAsync(l => l.MessageId == messageId);
-            if (!remainingLogs)
-            {
-                var message = await _context.Messages.FirstOrDefaultAsync(m => m.Id == messageId);
-                if (message != null)
-                    _context.Messages.Remove(message);
-            }
-
-            await _context.SaveChangesAsync();
-
-            return Ok(new { success = true, message = "Message deleted for all recipients" });
-        }
 
         [HttpGet("subscription/has/{userId}")]
         public async Task<IActionResult> HasSubscription(int userId)
@@ -684,65 +468,6 @@ namespace MarketingSpeedAPI.Controllers
                 message = "Connected account with active subscriptions",
                 features = result
             });
-        }
-
-        [HttpGet("groups-with-members/{userId}/{platformId}")]
-        public async Task<IActionResult> GetGroupsWithMembers(ulong userId, int platformId)
-        {
-            var account = await _context.user_accounts
-                .FirstOrDefaultAsync(a => a.UserId == (int)userId && a.PlatformId == platformId);
-
-            if (account == null || account.WasenderSessionId == null)
-                return NotFound();
-
-            var groupsRequest = new RestRequest($"/api/groups", Method.Get);
-            groupsRequest.AddHeader("Authorization", $"Bearer {account.AccessToken}");
-            var groupsResp = await _client.ExecuteAsync(groupsRequest);
-
-            if (!groupsResp.IsSuccessful)
-                return StatusCode((int)groupsResp.StatusCode, groupsResp.Content);
-
-            var result = new Dictionary<string, List<string>>();
-
-            var groupsJson = JsonDocument.Parse(groupsResp.Content);
-            if (groupsJson.RootElement.TryGetProperty("data", out var groups))
-            {
-                foreach (var g in groups.EnumerateArray())
-                {
-                    var groupName = g.GetProperty("name").GetString() ?? "Unnamed Group";
-                    var groupId = g.GetProperty("id").GetString();
-
-                    var metadataRequest = new RestRequest($"/api/groups/{groupId}/metadata", Method.Get);
-                    metadataRequest.AddHeader("Authorization", $"Bearer {account.AccessToken}");
-                    var metadataResp = await _client.ExecuteAsync(metadataRequest);
-
-                    var membersList = new List<string>();
-                    if (metadataResp.IsSuccessful)
-                    {
-                        var metadataJson = JsonDocument.Parse(metadataResp.Content);
-                        if (metadataJson.RootElement.TryGetProperty("data", out var metadata) &&
-                            metadata.TryGetProperty("participants", out var participants))
-                        {
-                            foreach (var p in participants.EnumerateArray())
-                            {
-                                var jid = p.TryGetProperty("jid", out var j) ? j.GetString() : null;
-
-                                if (!string.IsNullOrEmpty(jid))
-                                {
-                                   
-                                    var phone = jid.Contains("@") ? jid.Split('@')[0] : jid;
-                                    membersList.Add(phone);
-                                }
-                            }
-
-                        }
-                    }
-
-                    result[groupName] = membersList;
-                }
-            }
-
-            return Ok(result);
         }
 
         [HttpGet("groups/{userId}/{platformId}")]
@@ -1164,7 +889,6 @@ namespace MarketingSpeedAPI.Controllers
             if (account == null || string.IsNullOrEmpty(account.AccessToken))
                 return NotFound(new { success = false, message = "No active session" });
 
-            // المجموعات التي تركها المستخدم – يتم استبعادها
             var leftJids = await _context.LeftGroups
                 .Where(lg => lg.UserId == (int)userId)
                 .Select(lg => lg.GroupId)
@@ -1233,118 +957,7 @@ namespace MarketingSpeedAPI.Controllers
 
             return Ok(result);
         }
-
-
-        [HttpGet("groups/{userId}/{platformId}/{groupId}/membersCount")]
-        public async Task<IActionResult> GetGroupMembersCount(ulong userId, int platformId, string groupId)
-        {
-            var account = await _context.user_accounts
-                .FirstOrDefaultAsync(a => a.UserId == (int)userId && a.PlatformId == platformId);
-
-            if (account == null || account.AccessToken == null)
-                return NotFound(new { success = false, message = "No active WhatsApp session" });
-
-            // WHAPI endpoint
-            var options = new RestClientOptions($"https://gate.whapi.cloud/groups/{groupId}?resync=false");
-            var client = new RestClient(options);
-
-            var request = new RestRequest("", Method.Get);
-            request.AddHeader("accept", "application/json");
-            request.AddHeader("authorization", $"Bearer {account.AccessToken}");
-
-            var response = await client.ExecuteAsync(request);
-
-            if (!response.IsSuccessful)
-            {
-                return StatusCode((int)response.StatusCode, response.Content);
-            }
-
-            var json = JsonDocument.Parse(response.Content);
-
-            int memberCount = 0;
-
-            if (json.RootElement.TryGetProperty("participants", out var participants))
-            {
-                memberCount = participants.GetArrayLength();
-            }
-
-            return Ok(new
-            {
-                groupId,
-                membersCount = memberCount
-            });
-        }
-
-
-        [HttpGet("groups/membersCount/{userId}/{platformId}")]
-        public async Task<IActionResult> GetGroupsMembersCount(ulong userId, int platformId)
-        {
-            var account = await _context.user_accounts
-                .FirstOrDefaultAsync(a => a.UserId == (int)userId && a.PlatformId == platformId);
-
-            if (account == null || account.WasenderSessionId == null)
-                return NotFound();
-
-            var groupsRequest = new RestRequest("/api/groups", Method.Get);
-            groupsRequest.AddHeader("Authorization", $"Bearer {account.AccessToken}");
-            var groupsResp = await _client.ExecuteAsync(groupsRequest);
-
-            if (!groupsResp.IsSuccessful)
-                return StatusCode((int)groupsResp.StatusCode, groupsResp.Content);
-
-            var groupsJson = JsonDocument.Parse(groupsResp.Content);
-            var groupIds = new List<string>();
-
-            if (groupsJson.RootElement.TryGetProperty("data", out var groups))
-            {
-                groupIds = groups.EnumerateArray()
-                    .Select(g => g.GetProperty("id").GetString())
-                    .Where(id => id != null)
-                    .Select(id => id!)
-                    .ToList();
-            }
-
-            var semaphore = new SemaphoreSlim(5); 
-            var tasks = groupIds.Select(async groupId =>
-            {
-                await semaphore.WaitAsync();
-                try
-                {
-                    int memberCount = 0;
-                    try
-                    {
-                        var metaRequest = new RestRequest($"/api/groups/{groupId}/metadata", Method.Get);
-                        metaRequest.AddHeader("Authorization", $"Bearer {account.AccessToken}");
-                        var metaResp = await _client.ExecuteAsync(metaRequest);
-
-                        if (metaResp.IsSuccessful)
-                        {
-                            var metaJson = JsonDocument.Parse(metaResp.Content);
-                            if (metaJson.RootElement.TryGetProperty("data", out var meta) &&
-                                meta.TryGetProperty("participants", out var participants))
-                            {
-                                memberCount = participants.GetArrayLength();
-                            }
-                        }
-                    }
-                    catch { }
-
-                    return new
-                    {
-                        id = groupId,
-                        membersCount = memberCount
-                    };
-                }
-                finally
-                {
-                    semaphore.Release();
-                }
-            });
-
-            var result = (await Task.WhenAll(tasks)).ToList();
-            return Ok(result);
-        }
-
+         
 
         [HttpGet("group-members/{userId}/{groupJid}")]
         public async Task<IActionResult> GetGroupMembersByGroupJid(ulong userId, string groupJid)
@@ -1401,27 +1014,7 @@ namespace MarketingSpeedAPI.Controllers
             });
         }
 
-
-        [HttpGet("chats/{userId}/{platformId}")]
-        public async Task<IActionResult> GetChats(ulong userId, int platformId)
-        {
-            var account = await _context.user_accounts
-                .FirstOrDefaultAsync(a => a.UserId == (int)userId && a.PlatformId == platformId);
-
-            if (account == null || account.WasenderSessionId == null)
-                return NotFound();
-
-            var request = new RestRequest($"/api/contacts", Method.Get);
-            request.AddHeader("Authorization", $"Bearer {account.AccessToken}");
-            var resp = await _client.ExecuteAsync(request);
-
-            if (!resp.IsSuccessful)
-                return StatusCode((int)resp.StatusCode, resp.Content);
-
-            var data = JsonConvert.DeserializeObject<object>(resp.Content!);
-            return Ok(data);
-        }
-
+ 
         [HttpGet("get-chats/{userId}")]
         public async Task<IActionResult> GetChats(long userId)
         {
@@ -1631,211 +1224,7 @@ namespace MarketingSpeedAPI.Controllers
                 return Ok(new { success = false, message = "Error fetching chats", error = ex.Message });
             }
         }
-
-        [HttpPost("send-to-members")]
-        public async Task<IActionResult> SendToMembers([FromBody] SendMembersRequest req)
-        {
-            if (req.Recipients == null || req.Recipients.Count == 0)
-                return BadRequest(new { success = false, message = "No recipients provided" });
-
-            var account = await _context.user_accounts
-                .FirstOrDefaultAsync(a => a.UserId == (int)req.UserId &&
-                                          a.PlatformId == req.PlatformId &&
-                                          a.Status == "connected");
-
-            if (account == null || string.IsNullOrEmpty(account.WasenderSessionId?.ToString()))
-                return Ok(new { success = false, status = "1", message = "No account found" });
-
-            var uniqueRecipients = req.Recipients.Distinct().ToList();
-
-            var newMessage = new Message
-            {
-                PlatformId = req.PlatformId,
-                UserId = (long)req.UserId,
-                Title = $"Send to members {DateTime.Now:yyyyMMddHHmmss}",
-                Body = req.Message,
-                Targets = JsonConvert.SerializeObject(uniqueRecipients),
-                Attachments = (req.ImageUrls == null || req.ImageUrls.Count == 0) ? null : JsonConvert.SerializeObject(req.ImageUrls),
-                Status = "pending",
-                CreatedAt = DateTime.Now
-            };
-
-            _context.Messages.Add(newMessage);
-            await _context.SaveChangesAsync();
-
-            var logs = new List<MessageLog>();
-            var results = new List<object>();
-
-            string GetRandomDotSuffix()
-            {
-                var options = new[] { "", ".", "..", ". ." };
-                return options[Random.Shared.Next(options.Length)];
-            }
-
-            string CleanText(string text)
-            {
-                return text.TrimEnd('.', '…', '!', '?', '؟');
-            }
-
-            int GetRandomDelayMillis(int minSec = 10, int maxSec = 20)
-            {
-                return Random.Shared.Next(minSec, maxSec + 1) * 1000;
-            }
-
-            async Task SendMessageToRecipient(string number)
-            {
-                string? finalText = null;
-                if (!string.IsNullOrWhiteSpace(req.Message))
-                {
-                    finalText = CleanText(req.Message) + GetRandomDotSuffix();
-                }
-
-                var groupLogs = new List<MessageLog>();
-                var groupResults = new List<object>();
-
-                if (req.ImageUrls != null && req.ImageUrls.Count > 0)
-                {
-                    var lastUrl = req.ImageUrls.Last();
-                    foreach (var img in req.ImageUrls)
-                    {
-                        var body = new Dictionary<string, object?> { { "to", number } };
-                        var ext = Path.GetExtension(img).ToLower();
-                        string msgType = ext is ".jpg" or ".jpeg" or ".png" or ".gif" or ".webp"
-                            ? "imageUrl"
-                            : ext is ".mp4" or ".mov" or ".avi" or ".mkv"
-                                ? "videoUrl"
-                                : "documentUrl";
-
-                        body[msgType] = img;
-
-                        if (img == lastUrl && finalText != null)
-                            body["text"] = finalText;
-
-                        var request = new RestRequest("/api/send-message", Method.Post);
-                        request.AddHeader("Authorization", $"Bearer {account.AccessToken}");
-                        request.AddHeader("Content-Type", "application/json");
-                        request.AddJsonBody(body);
-
-                        var response = await _client.ExecuteAsync(request);
-
-                        string? externalId = null;
-                        if (response.IsSuccessful && !string.IsNullOrEmpty(response.Content))
-                        {
-                            try
-                            {
-                                var json = JObject.Parse(response.Content);
-                                externalId = json["data"]?["msgId"]?.ToString();
-                            }
-                            catch { }
-                        }
-
-                        groupLogs.Add(new MessageLog
-                        {
-                            MessageId = newMessage.Id,
-                            Recipient = number,
-                            UserId = (int)req.UserId,
-                            body = req.Message,
-                            PlatformId = account.PlatformId,
-                            Status = response.IsSuccessful ? "sent" : "failed",
-                            ErrorMessage = response.IsSuccessful ? null : response.Content,
-                            AttemptedAt = DateTime.Now,
-                            ExternalMessageId = externalId,
-                            toGroupMember = true
-                        });
-
-                        groupResults.Add(new
-                        {
-                            number,
-                            success = response.IsSuccessful,
-                            externalId,
-                            error = response.IsSuccessful ? null : response.Content
-                        });
-                    }
-                }
-                else if (finalText != null)
-                {
-                    var body = new Dictionary<string, object?> { { "to", number }, { "text", finalText } };
-                    var request = new RestRequest("/api/send-message", Method.Post);
-                    request.AddHeader("Authorization", $"Bearer {account.AccessToken}");
-                    request.AddHeader("Content-Type", "application/json");
-                    request.AddJsonBody(body);
-
-                    var response = await _client.ExecuteAsync(request);
-
-                    string? externalId = null;
-                    if (response.IsSuccessful && !string.IsNullOrEmpty(response.Content))
-                    {
-                        try
-                        {
-                            var json = JObject.Parse(response.Content);
-                            externalId = json["data"]?["msgId"]?.ToString();
-                        }
-                        catch { }
-                    }
-
-                    groupLogs.Add(new MessageLog
-                    {
-                        MessageId = newMessage.Id,
-                        UserId = (int)req.UserId,
-                        body = req.Message,
-                        Recipient = number,
-                        PlatformId = account.PlatformId,
-                        Status = response.IsSuccessful ? "sent" : "failed",
-                        ErrorMessage = response.IsSuccessful ? null : response.Content,
-                        AttemptedAt = DateTime.Now,
-                        ExternalMessageId = externalId,
-                        toGroupMember = true
-                    });
-
-                    groupResults.Add(new
-                    {
-                        number,
-                        success = response.IsSuccessful,
-                        externalId,
-                        error = response.IsSuccessful ? null : response.Content
-                    });
-                }
-
-                logs.AddRange(groupLogs);
-                results.AddRange(groupResults);
-
-                await Task.Delay(GetRandomDelayMillis());
-            }
-
-            int maxConcurrentSends = 3;
-            var semaphore = new SemaphoreSlim(maxConcurrentSends);
-
-            var sendTasks = uniqueRecipients.Select(async number =>
-            {
-                await semaphore.WaitAsync();
-                try
-                {
-                    await SendMessageToRecipient(number);
-                }
-                finally
-                {
-                    semaphore.Release();
-                }
-            });
-
-            await Task.WhenAll(sendTasks);
-
-            _context.message_logs.AddRange(logs);
-            newMessage.Status = logs.Any(l => l.Status == "sent") ? "sent" : "failed";
-            newMessage.SentAt = DateTime.Now;
-
-            await _context.SaveChangesAsync();
-
-            return Ok(new
-            {
-                success = true,
-                status = "2",
-                message = newMessage.Body,
-                newMessageId = newMessage.Id,
-                results
-            });
-        }
-
+ 
 
         [HttpPost("block-chats/{userId}")]
         public async Task<IActionResult> BlockChats(long userId, [FromBody] List<string> phones)
@@ -2103,8 +1492,6 @@ namespace MarketingSpeedAPI.Controllers
                 });
             }
         }
-
-
         string NormalizePhone(string number)
         {
             if (string.IsNullOrWhiteSpace(number))
@@ -2122,9 +1509,7 @@ namespace MarketingSpeedAPI.Controllers
         private static readonly object _suffixLock = new();
 
         [HttpPost("send-to-single-member/{userId}")]
-        public async Task<IActionResult> SendToSingleMember(
-    ulong userId,
-    [FromBody] SendSingleMemberRequest req)
+        public async Task<IActionResult> SendToSingleMember( ulong userId, [FromBody] SendSingleMemberRequest req)
         {
             if (string.IsNullOrEmpty(req.Recipient))
                 return BadRequest(new { success = false, blocked = false, error = "Recipient is required" });
@@ -2446,9 +1831,6 @@ namespace MarketingSpeedAPI.Controllers
             });
         }
 
-        // ----------------------------------------
-        //       Helper Methods
-        // ----------------------------------------
         private async Task<(bool success, bool blocked, string? error, string? externalId)>
             SendMediaMessage(dynamic account, string endpoint, Dictionary<string, object?> body)
         {
@@ -2498,7 +1880,6 @@ namespace MarketingSpeedAPI.Controllers
 
             return (success, blocked, errorMessage, externalId);
         }
-
         private async Task<(bool success, bool blocked, string? error, string? externalId)>
             SendTextMessage(dynamic account, string recipient, string text)
         {
@@ -2510,20 +1891,7 @@ namespace MarketingSpeedAPI.Controllers
 
             return await SendMediaMessage(account, "messages/text", body);
         }
-
-        // ----------------------------------------
-        //       تسجيل اللوج لكل رسالة
-        // ----------------------------------------
-        private async Task LogMessage(
-            ulong userId,
-            ulong? mainMessageId,
-            string groupId,
-            dynamic account,
-            string? message,
-            bool? fromChates,
-            bool success,
-            string? error,
-            string? externalId)
+        private async Task LogMessage( ulong userId, ulong? mainMessageId, string groupId,dynamic account, string? message,bool? fromChates, bool success, string? error, string? externalId)
         {
             try
             {
@@ -2547,16 +1915,7 @@ namespace MarketingSpeedAPI.Controllers
             }
             catch { }
         }
-        private async Task MembersLogMessage(
-           ulong userId,
-           ulong? mainMessageId,
-           string groupId,
-           dynamic account,
-           string? message,
-           bool? fromChates,
-           bool success,
-           string? error,
-           string? externalId)
+        private async Task MembersLogMessage(ulong userId, ulong? mainMessageId, string groupId, dynamic account,string? message, bool? fromChates, bool success, string? error, string? externalId)
         {
             try
             {
@@ -2580,6 +1939,7 @@ namespace MarketingSpeedAPI.Controllers
             }
             catch { }
         }
+        
         [HttpGet("daily-limit/{userId}")]
         public async Task<IActionResult> GetDailyLimit(ulong userId)
         {
@@ -2672,7 +2032,6 @@ namespace MarketingSpeedAPI.Controllers
                 });
             }
         }
-
         private async Task<int> GetLastDayInCycle(string sender)
         {
             var firstLog = await _context.message_logs
@@ -2686,7 +2045,6 @@ namespace MarketingSpeedAPI.Controllers
 
             return (daysPassed % 30) + 1;
         }
-
         private async Task<IActionResult> CalculateCycleResult(string senderNumber, int dayInCycle)
         {
             int dailyLimit = GetLimitForDay(dayInCycle);
@@ -2712,7 +2070,6 @@ namespace MarketingSpeedAPI.Controllers
                 dayInCycle
             });
         }
-
         private int GetLimitForDay(int day)
         {
             return day switch
@@ -2723,7 +2080,6 @@ namespace MarketingSpeedAPI.Controllers
                 _ => 500
             };
         }
-
 
 
         [HttpPost("create-group-from-multiple/{userId}")]
@@ -2902,8 +2258,6 @@ namespace MarketingSpeedAPI.Controllers
                 results
             });
         }
-
-        /// ✅ دالة خصم الاستخدام بدقة لكل عضو ناجح
         private async Task DeductUsageForCreatingGroupsAsync(int userId, int count)
         {
             try
@@ -2951,7 +2305,6 @@ namespace MarketingSpeedAPI.Controllers
             }
         }
 
-
         [HttpPost("add-members-to-existing-group/{userId}")]
         public async Task<IActionResult> AddMembersToExistingGroup(long userId, [FromBody] AddMembersToExistingGroupRequest req)
         {
@@ -2977,8 +2330,6 @@ namespace MarketingSpeedAPI.Controllers
                 Members = req.Members
             });
         }
-
-
 
     }
 }

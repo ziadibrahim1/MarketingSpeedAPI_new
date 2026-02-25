@@ -16,18 +16,9 @@ namespace MarketingSpeedAPI.Controllers
             _context = context;
         }
 
-        // ✅ تعديل GetAll Packages
+
         [HttpGet]
-        public async Task<ActionResult<IEnumerable<PackageDto>>> GetAll(
-     [FromQuery] int? categoryId,
-     [FromQuery] string? status,           // ✅ فلترة بالحالة (active/inactive)
-     [FromQuery] bool? archived,           // ✅ فلترة بالأرشفة
-     [FromQuery] decimal? minPrice,        // ✅ فلترة بالسعر الأدنى
-     [FromQuery] decimal? maxPrice,        // ✅ فلترة بالسعر الأعلى
-     [FromQuery] int? minDuration,         // ✅ فلترة بالمدة الأدنى
-     [FromQuery] int? maxDuration,         // ✅ فلترة بالمدة الأعلى
-     [FromQuery] string? keyword           // ✅ بحث بالكلمة (اسم عربي/إنجليزي/مميزات)
- )
+        public async Task<ActionResult<IEnumerable<PackageDto>>> GetAll([FromQuery] int? categoryId,[FromQuery] string? status,[FromQuery] bool? archived,[FromQuery] decimal? minPrice,[FromQuery] decimal? maxPrice,[FromQuery] int? minDuration,[FromQuery] int? maxDuration,[FromQuery] string? keyword)
         {
             var query = _context.Packages
                 .Include(p => p.Features)
@@ -282,7 +273,6 @@ namespace MarketingSpeedAPI.Controllers
             }
         }
 
-
         [HttpGet("user-subscription")]
         public async Task<IActionResult> GetUserSubscription([FromQuery] int userId)
         {
@@ -390,7 +380,6 @@ namespace MarketingSpeedAPI.Controllers
             return Ok(new { message = "Unsubscribed successfully" });
         }
 
-
         [HttpPost("add-usage")]
         public async Task<IActionResult> AddUsage([FromBody] SubscriptionUsage usage)
         {
@@ -425,7 +414,6 @@ namespace MarketingSpeedAPI.Controllers
             await _context.SaveChangesAsync();
             return Ok(new { message = "Usage updated successfully" });
         }
-
 
         [HttpGet("usage-summary")]
         public async Task<IActionResult> GetUsageSummary([FromQuery] int subscriptionId)
@@ -511,7 +499,6 @@ namespace MarketingSpeedAPI.Controllers
             });
         }
 
-
         [HttpGet("{id}")]
         public async Task<ActionResult<Package>> GetById(int id)
         {
@@ -584,8 +571,7 @@ namespace MarketingSpeedAPI.Controllers
 
             return NoContent();
         }
-
-        // 📌 إحصائية: أكثر الباقات استخداماً (Top Packages by Subscribers)
+ 
         [HttpGet("top/{count}")]
         public async Task<ActionResult<IEnumerable<object>>> GetTopPackages(int count = 5)
         {
@@ -606,7 +592,6 @@ namespace MarketingSpeedAPI.Controllers
             return Ok(top);
         }
 
-        // 📌 إحصائية: الباقات التي لا تحتوي مشتركين منذ أكثر من 30 يوم
         [HttpGet("inactive-over-30-days")]
         public async Task<ActionResult<IEnumerable<object>>> GetInactivePackages()
         {
@@ -626,7 +611,6 @@ namespace MarketingSpeedAPI.Controllers
             return Ok(inactive);
         }
 
-        // 📌 إحصائية: عدد الباقات حسب الحالة (active / inactive / archived)
         [HttpGet("stats/status")]
         public async Task<ActionResult<object>> GetPackageStatusStats()
         {
@@ -644,7 +628,6 @@ namespace MarketingSpeedAPI.Controllers
             return Ok(new { Stats = stats, Archived = archivedCount });
         }
 
-        // 📌 إحصائية: مجموع إيرادات الباقات (على السعر × عدد المشتركين)
         [HttpGet("stats/revenue")]
         public async Task<ActionResult<object>> GetRevenue()
         {
@@ -655,7 +638,6 @@ namespace MarketingSpeedAPI.Controllers
             return Ok(new { TotalRevenue = revenue });
         }
 
-        // 📌 إحصائية: الباقات المجدولة للنشر في المستقبل
         [HttpGet("scheduled")]
         public async Task<ActionResult<IEnumerable<object>>> GetScheduledPackages()
         {
