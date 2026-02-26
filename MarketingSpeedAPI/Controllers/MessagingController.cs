@@ -1014,7 +1014,7 @@ namespace MarketingSpeedAPI.Controllers
             });
         }
 
- 
+
         [HttpGet("get-chats/{userId}")]
         public async Task<IActionResult> GetChats(long userId)
         {
@@ -1023,13 +1023,11 @@ namespace MarketingSpeedAPI.Controllers
                     a.UserId == (int)userId &&
                     a.PlatformId == 1 &&
                     a.Status == "connected");
-
             if (account == null)
                 return Ok(new { success = false, message = "No connected account found" });
 
             try
             {
-                // الأكواد العربية المسموح بها
                 var allowedPrefixes = new List<string>
         {
             "20","966","971","974","973","965","968","967","962",
@@ -1037,79 +1035,165 @@ namespace MarketingSpeedAPI.Controllers
             "222","252","253","269"
         };
 
+                // ============ 1) جلب Contacts ============
                 var collectedContacts = new List<JsonElement>();
                 int offset = 0;
-                int limit = 500;
+                const int limit = 500;
 
                 while (true)
                 {
                     var restClient = new RestClient(
                         $"https://gate.whapi.cloud/contacts?count={limit}&offset={offset}"
                     );
-
                     var request = new RestRequest("", Method.Get);
                     request.AddHeader("accept", "application/json");
                     request.AddHeader("authorization", $"Bearer {account.AccessToken}");
 
                     var response = await restClient.ExecuteAsync(request);
-
                     if (!response.IsSuccessful || string.IsNullOrEmpty(response.Content))
                         break;
 
                     using var json = JsonDocument.Parse(response.Content);
-
                     if (!json.RootElement.TryGetProperty("contacts", out var contactsArray) ||
                         contactsArray.ValueKind != JsonValueKind.Array)
                         break;
 
-                    // ✅ الحل هنا: Clone()
                     foreach (var contact in contactsArray.EnumerateArray())
-                    {
                         collectedContacts.Add(contact.Clone());
+
+                    int count = json.RootElement.GetProperty("count").GetInt32();
+                    int total = json.RootElement.GetProperty("total").GetInt32();
+                    offset += count;
+                    if (offset >= total) break;
+                }
+
+                // بناء Dictionary من الـ contacts عشان نعمل merge سريع
+                // key: رقم الهاتف بدون @c.us
+                var contactsDict = new Dictionary<string, JsonElement>();
+                foreach (var contact in collectedContacts)
+                {
+                    if (!contact.TryGetProperty("id", out var idProp)) continue;
+                    var phone = idProp.GetString();
+                    if (!string.IsNullOrWhiteSpace(phone))
+                        contactsDict[phone] = contact;
+                }
+
+                // ============ 2) جلب Chats وفلترة contact فقط ============
+                var collectedChats = new List<JsonElement>();
+                offset = 0;
+
+                while (true)
+                {
+                    var restClient = new RestClient(
+                        $"https://gate.whapi.cloud/chats?count={limit}&offset={offset}"
+                    );
+                    var request = new RestRequest("", Method.Get);
+                    request.AddHeader("accept", "application/json");
+                    request.AddHeader("authorization", $"Bearer {account.AccessToken}");
+
+                    var response = await restClient.ExecuteAsync(request);
+                    if (!response.IsSuccessful || string.IsNullOrEmpty(response.Content))
+                        break;
+
+                    using var json = JsonDocument.Parse(response.Content);
+                    if (!json.RootElement.TryGetProperty("chats", out var chatsArray) ||
+                        chatsArray.ValueKind != JsonValueKind.Array)
+                        break;
+
+                    foreach (var chat in chatsArray.EnumerateArray())
+                    {
+                        // فلتر: contact فقط
+                        if (!chat.TryGetProperty("type", out var typeProp)) continue;
+                        if (typeProp.GetString() != "contact") continue;
+
+                        collectedChats.Add(chat.Clone());
                     }
 
                     int count = json.RootElement.GetProperty("count").GetInt32();
                     int total = json.RootElement.GetProperty("total").GetInt32();
-
                     offset += count;
-                    if (offset >= total)
-                        break;
+                    if (offset >= total) break;
                 }
 
-                // 🔽 نفس منطق الفلترة القديم
+                // ============ 3) Merge + فلترة الأرقام ============
                 var validChats = new List<object>();
 
+                // أولاً: الـ contacts المفلترة (اللي مش موجودة في chats)
+                var chatIds = new HashSet<string>(
+                    collectedChats
+                        .Where(c => c.TryGetProperty("id", out _))
+                        .Select(c => c.GetProperty("id").GetString() ?? "")
+                );
+
+                // الـ Contacts القديمة (بدون last_message)
                 foreach (var item in collectedContacts)
                 {
-                    if (!item.TryGetProperty("id", out var idProp))
-                        continue;
-
+                    if (!item.TryGetProperty("id", out var idProp)) continue;
                     var phone = idProp.GetString();
-                    if (string.IsNullOrWhiteSpace(phone))
-                        continue;
+                    if (string.IsNullOrWhiteSpace(phone)) continue;
 
                     var clean = new string(phone.Where(char.IsDigit).ToArray());
-                    if (clean.Length < 8 || clean.Length > 15)
-                        continue;
+                    if (clean.Length < 8 || clean.Length > 15) continue;
+                    if (!allowedPrefixes.Any(prefix => clean.StartsWith(prefix))) continue;
 
-                    if (!allowedPrefixes.Any(prefix => clean.StartsWith(prefix)))
-                        continue;
+                    var chatId = phone + "@c.us";
+
+                    // لو موجود في الـ chats، هنتعامل معاه في الخطوة الجاية
+                    if (chatIds.Contains(chatId)) continue;
 
                     validChats.Add(new
                     {
-                        id = phone + "@c.us",     // نفس صيغة chats
+                        id = chatId,
                         type = "contact",
-                        name = item.TryGetProperty("name", out var nameProp)
-                            ? nameProp.GetString()
-                            : null,
-                        pushname = item.TryGetProperty("pushname", out var pushProp)
-                            ? pushProp.GetString()
-                            : null,
-                        saved = item.TryGetProperty("saved", out var savedProp)
-                            ? savedProp.GetBoolean()
-                            : false
+                        name = item.TryGetProperty("name", out var nameProp) ? nameProp.GetString() : null,
+                        pushname = item.TryGetProperty("pushname", out var pushProp) ? pushProp.GetString() : null,
+                        saved = item.TryGetProperty("saved", out var savedProp) && savedProp.GetBoolean(),
+                        unread = 0,
+                        last_message = (object)null
                     });
                 }
+
+                // الـ Chats اللي نوعها contact + merge مع بيانات الـ contacts
+                foreach (var chat in collectedChats)
+                {
+                    if (!chat.TryGetProperty("id", out var idProp)) continue;
+                    var chatId = idProp.GetString();
+                    if (string.IsNullOrWhiteSpace(chatId)) continue;
+
+                    // استخرج الرقم عشان تفلتر
+                    var phoneRaw = chatId.Replace("@c.us", "").Replace("@s.whatsapp.net", "");
+                    var clean = new string(phoneRaw.Where(char.IsDigit).ToArray());
+                    if (clean.Length < 8 || clean.Length > 15) continue;
+                    if (!allowedPrefixes.Any(prefix => clean.StartsWith(prefix))) continue;
+
+                    // جيب بيانات الـ contact لو موجودة
+                    contactsDict.TryGetValue(phoneRaw, out var contactData);
+
+                    validChats.Add(new
+                    {
+                        id = chatId,
+                        type = "contact",
+                        name = contactData.ValueKind != JsonValueKind.Undefined && contactData.TryGetProperty("name", out var n)
+                            ? n.GetString()
+                            : (chat.TryGetProperty("name", out var cn) ? cn.GetString() : null),
+                        pushname = contactData.ValueKind != JsonValueKind.Undefined && contactData.TryGetProperty("pushname", out var pp)
+                            ? pp.GetString()
+                            : null,
+                        saved = contactData.ValueKind != JsonValueKind.Undefined && contactData.TryGetProperty("saved", out var sv) && sv.GetBoolean(),
+                        unread = chat.TryGetProperty("unread", out var unread) ? unread.GetInt32() : 0,
+                        timestamp = chat.TryGetProperty("timestamp", out var ts) ? ts.GetInt64() : 0,
+                        last_message = chat.TryGetProperty("last_message", out var lm) ? lm.Clone() : (object)null
+                    });
+                }
+
+                // ترتيب حسب آخر رسالة
+                validChats = validChats
+                    .OrderByDescending(c =>
+                    {
+                        var prop = c.GetType().GetProperty("timestamp");
+                        return prop != null ? (long)(prop.GetValue(c) ?? 0L) : 0L;
+                    })
+                    .ToList<object>();
 
                 return Ok(new
                 {
@@ -1128,8 +1212,6 @@ namespace MarketingSpeedAPI.Controllers
                 });
             }
         }
-
-
         [HttpGet("get-personal-chats/{userId}")]
         public async Task<IActionResult> GetPersonalChats(long userId)
         {
