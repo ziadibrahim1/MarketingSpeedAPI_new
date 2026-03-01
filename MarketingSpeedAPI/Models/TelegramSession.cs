@@ -192,7 +192,10 @@ namespace MarketingSpeedAPI.Models
         public long? AccessHash { get; set; }
         public string PeerType { get; set; }  
     }
-
+    public class ClearDialogResponse
+    {
+        public bool Success { get; set; }
+    }
     public class JoinByLinkRequest
     {
         public long UserId { get; set; }

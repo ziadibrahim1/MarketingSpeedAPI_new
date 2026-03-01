@@ -131,11 +131,7 @@
                     PropertyNameCaseInsensitive = true
                 });
         }
-        public async Task<bool> ClearDialogAsync(
-     long userId,
-     long id,
-     long? accessHash,
-     string? peerType)
+        public async Task<bool> ClearDialogAsync(long userId,long id,long? accessHash, string? peerType)
         {
             var response = await _http.PostAsJsonAsync(
                 $"dialogs/clear/{userId}",
@@ -149,16 +145,14 @@
             if (!response.IsSuccessStatusCode)
                 return false;
 
-            var result = await response.Content.ReadFromJsonAsync<Dictionary<string, object>>(
-                new JsonSerializerOptions
-                {
-                    PropertyNameCaseInsensitive = true
-                });
+            var result = await response.Content.ReadFromJsonAsync<ClearDialogResponse>(
+    new JsonSerializerOptions
+    {
+        PropertyNameCaseInsensitive = true
+    });
 
-            if (result != null && result.ContainsKey("success"))
-                return Convert.ToBoolean(result["success"]);
-
-            return false;
+            return result?.Success ?? false;
+             
         }
 
         public async Task SendMessageAsync(long userId, long peerId, string message)
